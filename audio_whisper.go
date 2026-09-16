@@ -38,6 +38,7 @@ type WhisperAudio struct {
 
 	silenceThreshold int32
 	silenceHangover  time.Duration
+	debug            bool
 
 	malgoCtx *malgo.AllocatedContext
 }
@@ -58,6 +59,7 @@ func NewWhisperAudio(cfg *Config) (*WhisperAudio, error) {
 		timeout:          time.Duration(cfg.ListeningTimeout) * time.Second,
 		silenceThreshold: int32(cfg.VADSilenceThreshold),
 		silenceHangover:  time.Duration(cfg.VADSilenceMs) * time.Millisecond,
+		debug:            cfg.Debug,
 		malgoCtx:         ctx,
 	}, nil
 }
@@ -111,14 +113,17 @@ func (w *WhisperAudio) recordAudio() ([]byte, error) {
 		captured    []byte
 		lastVoiceAt = time.Now()
 		voiceHeard  bool
+		lastPeak    int32
 	)
 
 	callbacks := malgo.DeviceCallbacks{
 		Data: func(_, pSample []byte, _ uint32) {
-			loud := peakAmplitude(pSample) > w.silenceThreshold
+			peak := peakAmplitude(pSample)
+			loud := peak > w.silenceThreshold
 
 			mu.Lock()
 			captured = append(captured, pSample...)
+			lastPeak = peak
 			if loud {
 				lastVoiceAt = time.Now()
 				voiceHeard = true
@@ -143,10 +148,17 @@ func (w *WhisperAudio) recordAudio() ([]byte, error) {
 	// the hard cap for someone who just keeps talking.
 	deadline := time.Now().Add(w.timeout)
 	ticker := time.NewTicker(100 * time.Millisecond)
-	for now := range ticker.C {
+	for tick := 0; ; tick++ {
+		now := <-ticker.C
 		mu.Lock()
-		spoke, silentFor := voiceHeard, now.Sub(lastVoiceAt)
+		spoke, silentFor, peak := voiceHeard, now.Sub(lastVoiceAt), lastPeak
 		mu.Unlock()
+
+		// ~once/second: confirms whether spoken audio is actually crossing
+		// VAD_SILENCE_THRESHOLD at all, vs. always waiting out the timeout.
+		if w.debug && tick%10 == 0 {
+			fmt.Printf("🔊 peak=%d threshold=%d spoke=%v\n", peak, w.silenceThreshold, spoke)
+		}
 
 		if now.After(deadline) || (spoke && silentFor > w.silenceHangover) {
 			break
