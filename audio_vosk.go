@@ -128,7 +128,9 @@ func (v *VoskAudio) transcribe(audio []byte) (string, error) {
 	if err := conn.WriteMessage(websocket.BinaryMessage, audio); err != nil {
 		return "", fmt.Errorf("send audio: %w", err)
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"eof": 1}`)); err != nil {
+	// alphacep/vosk-server's reference asr_server.py checks this exact string
+	// (with spaces around ':'), not parsed JSON — don't "clean up" the spacing.
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"eof" : 1}`)); err != nil {
 		return "", fmt.Errorf("send eof: %w", err)
 	}
 

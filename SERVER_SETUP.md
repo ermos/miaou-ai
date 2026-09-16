@@ -1,322 +1,130 @@
-# 🖥️ Ollama Server Setup Guide
+# 🎙️ Vosk Speech Recognition Server Setup
 
-This guide is for setting up the **Ollama server** on your second Raspberry Pi (8GB RAM).
+This sets up the Vosk server that `AUDIO_MODE=vosk_server` talks to for
+real microphone input. It can run on the same Raspberry Pi as Miaou, or on
+a separate machine on your network.
 
-The client (Miaou chat buddy) will connect to this server.
+> The official Vosk server Docker image (`alphacep/kaldi-en`) is **amd64-only**
+> — it won't run natively on a Raspberry Pi. This guide installs the Python
+> `vosk` package directly instead, which ships an `aarch64` wheel and needs
+> no Docker/emulation.
 
 ---
 
-## 🚀 Server Installation
+## 🚀 Installation
 
-### Prerequisites
-- Raspberry Pi 3 or 4 with **8GB+ RAM**
-- Wired internet (recommended for stability)
-- Raspberry Pi OS (any version)
-
-### Step 1: Install Ollama
+### 1. Install Python deps
 
 ```bash
-# Download and install Ollama
-curl https://ollama.ai/install.sh | sh
-
-# Start the service
-ollama serve
+sudo apt install python3-pip python3-venv
+python3 -m venv ~/vosk-server/venv
+source ~/vosk-server/venv/bin/activate
+pip install vosk websockets
 ```
 
-Keep this terminal open! The server is now running on `localhost:11434`
+### 2. Get the server script
 
-### Step 2: Make it Accessible from Network
-
-To access from another RPi, you need to make Ollama listen on all interfaces:
+This is Alphacep's reference websocket server (the protocol `audio_vosk.go`
+speaks: raw PCM over a websocket, ending with an `{"eof" : 1}` message):
 
 ```bash
-# In a new terminal:
-sudo nano /etc/systemd/system/ollama.service
+curl -o ~/vosk-server/asr_server.py \
+  https://raw.githubusercontent.com/alphacep/vosk-server/master/websocket/asr_server.py
 ```
 
-Find the `[Service]` section and add:
-```
-Environment="OLLAMA_HOST=0.0.0.0:11434"
+### 3. Download a model
+
+The small English model is enough for this use case and light on RAM:
+
+```bash
+cd ~/vosk-server
+curl -LO https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+unzip vosk-model-small-en-us-0.15.zip
+mv vosk-model-small-en-us-0.15 model
+rm vosk-model-small-en-us-0.15.zip
 ```
 
-Full example:
+### 4. Run it
+
+The client records at 16kHz (`SAMPLE_RATE` in `.env`) — the server must be
+told to expect that, its own default is 8kHz:
+
+```bash
+cd ~/vosk-server
+source venv/bin/activate
+VOSK_SAMPLE_RATE=16000 python3 asr_server.py model
+```
+
+You should see `INFO:root:Listening on 0.0.0.0:2700`. Leave this running,
+or set it up as a systemd service below.
+
+---
+
+## 🔁 Auto-start on boot (crash-resistant)
+
+Replace `pi` below with your actual Linux username (check with `whoami`):
+
+```bash
+sudo nano /etc/systemd/system/vosk-server.service
+```
+
 ```ini
 [Unit]
-Description=Ollama
+Description=Vosk speech recognition server
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/ollama serve
+User=pi
+WorkingDirectory=/home/pi/vosk-server
+Environment=VOSK_SAMPLE_RATE=16000
+ExecStart=/home/pi/vosk-server/venv/bin/python3 asr_server.py model
 Restart=always
-RestartSec=5s
-
-Environment="OLLAMA_HOST=0.0.0.0:11434"
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Then restart:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl restart ollama
-```
-
-### Step 3: Download a Model
-
-Choose a model based on your needs:
-
-**Fast (6GB):**
-```bash
-ollama pull neural-chat:7b
-```
-
-**Balanced (7GB):**
-```bash
-ollama pull mistral:7b
-```
-
-**Best Quality (13GB - slower):**
-```bash
-ollama pull llama2:13b
-```
-
-**Ultra-light (1.6GB - good for 2GB client):**
-```bash
-ollama pull phi:2.5
-```
-
-This downloads the model and is ready to use.
-
-### Step 4: Verify it's Working
-
-```bash
-# Check available models
-curl http://localhost:11434/api/tags
-
-# Test a simple query
-curl http://localhost:11434/api/generate -d '{
-  "model": "mistral:7b",
-  "prompt": "Hello, how are you?",
-  "stream": false
-}'
+sudo systemctl enable --now vosk-server.service
+journalctl -u vosk-server.service -f
 ```
 
 ---
 
-## 🔍 Finding Your Server IP
+## ✅ Point Miaou at it
 
-From the **server** terminal:
+In Miaou's `.env`:
+
+```env
+AUDIO_MODE=vosk_server
+# Same Pi:
+VOSK_SERVER_URL=ws://localhost:2700
+# Separate machine:
+VOSK_SERVER_URL=ws://<server-ip>:2700
+```
+
+---
+
+## 🔧 Troubleshooting
+
+### Server won't start / `ModuleNotFoundError`
+Make sure you activated the venv before running it (`source venv/bin/activate`),
+or use the venv's full python path (as the systemd unit above does).
+
+### Miaou gets no transcription (always empty after ~5s)
+- Check `VOSK_SAMPLE_RATE` on the server matches `SAMPLE_RATE` in Miaou's `.env` (both 16000).
+- Check the server is reachable: `curl -v telnet://<server-ip>:2700` should connect (then hang, that's normal — it's a websocket, not HTTP).
+
+### Find the server's IP (if running on a separate machine)
 ```bash
 hostname -I
 ```
 
-Example output: `192.168.1.100 192.168.1.101`
-
-Use this IP when configuring the client.
-
----
-
-## ✅ Testing from Client
-
-From the **client** RPi (Miaou):
-
+### Test the microphone independently
 ```bash
-# Replace with your actual server IP
-curl http://192.168.1.100:11434/api/tags
-
-# Should return: {"models": [...]}
+arecord -d 3 test.wav && aplay test.wav
 ```
-
-If this works, your client can connect!
-
----
-
-## 🎯 Model Selection Tips
-
-| Model | Size | Speed | Quality | Memory |
-|-------|------|-------|---------|--------|
-| phi:2.5 | 1.6GB | Fast | Good | 2GB |
-| neural-chat:7b | 6GB | Good | Good | 4GB |
-| mistral:7b | 7GB | Good | Good | 4GB |
-| llama2:13b | 13GB | Slow | Great | 6GB |
-
-**Recommended for Miaou:** `mistral:7b` or `neural-chat:7b`
-
----
-
-## 🔧 Troubleshooting Server
-
-### Ollama not starting
-```bash
-# Check logs
-journalctl -u ollama -n 20
-
-# Try manual start
-ollama serve
-```
-
-### Connection refused on port 11434
-```bash
-# Check if Ollama is running
-ps aux | grep ollama
-
-# Kill and restart
-pkill -f ollama
-sudo systemctl restart ollama
-```
-
-### Slow responses
-- Check available disk space: `df -h`
-- Check memory: `free -h`
-- Close other apps
-- Use smaller model
-
-### Can't reach from client
-```bash
-# On server: Check listening ports
-netstat -tlnp | grep 11434
-
-# On client: Test ping
-ping 192.168.1.100
-
-# On client: Test port
-curl -v http://192.168.1.100:11434/api/tags
-```
-
----
-
-## 🛠️ Useful Commands
-
-### Start/stop Ollama
-```bash
-# Start
-sudo systemctl start ollama
-
-# Stop
-sudo systemctl stop ollama
-
-# Status
-sudo systemctl status ollama
-
-# Auto-start on boot
-sudo systemctl enable ollama
-```
-
-### Model Management
-```bash
-# List models
-ollama list
-
-# Delete model (free space)
-ollama rm mistral:7b
-
-# Show model info
-ollama show mistral:7b
-
-# Pull specific version
-ollama pull mistral:7b-q4_0  # Quantized version
-```
-
-### Monitor Server
-```bash
-# Watch logs in real-time
-journalctl -u ollama -f
-
-# Check memory usage
-free -h
-
-# Check GPU usage (if applicable)
-nvidia-smi
-```
-
----
-
-## 📊 Performance Optimization
-
-### For 8GB RAM Server
-
-**Use this model:**
-```bash
-ollama pull mistral:7b
-```
-
-**Config for better speed:**
-Create `~/.ollama/config.json`:
-```json
-{
-  "num_gpu": -1,
-  "thread": 4,
-  "threads": 4
-}
-```
-
-### If Server Gets Slow
-
-```bash
-# Free memory
-sync && echo 3 > /proc/sys/vm/drop_caches
-
-# Kill other processes
-kill -9 $(pgrep -f "unrelated_app")
-
-# Monitor in real-time
-watch -n 1 free -h
-```
-
----
-
-## 🚀 Quick Setup Script
-
-Combine all steps:
-
-```bash
-#!/bin/bash
-curl https://ollama.ai/install.sh | sh
-sudo systemctl restart ollama
-ollama pull mistral:7b
-curl http://localhost:11434/api/tags
-echo "✅ Server ready!"
-hostname -I | awk '{print "IP:", $1}'
-```
-
-Save as `setup_server.sh` and run:
-```bash
-bash setup_server.sh
-```
-
----
-
-## 🔗 Next Steps
-
-Once your server is running:
-
-1. Note your server IP address
-2. Go to client setup in `install.sh`
-3. Enter server IP when prompted
-4. Start Miaou!
-
----
-
-## 📞 Support
-
-### Check everything is working
-
-```bash
-# On server
-curl http://localhost:11434/api/tags
-
-# On client (replace IP)
-curl http://192.168.1.100:11434/api/tags
-```
-
-Both should show your installed models.
-
----
-
-## 🎓 Learning Resources
-
-- [Ollama Docs](https://ollama.ai)
-- [Model Library](https://ollama.ai/library)
-- [API Reference](https://github.com/ollama/ollama/blob/main/docs/api.md)
