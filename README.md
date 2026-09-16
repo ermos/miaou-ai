@@ -18,7 +18,7 @@ A cute English learning chat buddy written in Go, powered by the OpenAI API and 
 ### Software
 - Go 1.22+
 - Docker (only for cross-compiling to the Raspberry Pi via `make package`, see below)
-- macOS (audio playback currently uses `afplay`; swap for `aplay` to run on Linux/Raspberry Pi)
+- macOS or Linux (audio playback auto-picks `afplay`/`aplay`)
 - An OpenAI API key
 
 ### Hardware (for a physical device build)
@@ -71,23 +71,37 @@ sudo apt install --no-install-recommends xserver-xorg xinit
 ```
 
 Then let systemd own the whole X session: it starts on boot and restarts
-automatically if the app (or X) crashes.
+automatically if the app (or X) crashes. Free up tty1 first (the service
+takes it over), and replace `ksmiti` below with your actual Linux username
+(check with `whoami`) — a wrong `User=` fails with `status=217/USER`.
 
 ```bash
+sudo systemctl disable --now getty@tty1.service
 sudo nano /etc/systemd/system/miaou-ai.service
 ```
 
 ```ini
 [Unit]
 Description=Miaou AI - kiosk display
-After=network-online.target
+After=network-online.target getty@tty1.service
 Wants=network-online.target
+Conflicts=getty@tty1.service
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/miaou-ai
-ExecStart=/usr/bin/xinit /home/pi/miaou-ai/miaou-ai -- :0 vt1 -nocursor
+User=ksmiti
+# PAMName+TTYPath register a real logind session on this tty, which is what
+# grants X permission to open the console (xf86OpenConsole) — a plain
+# ExecStart never gets that permission, no matter the user.
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty
+StandardOutput=journal
+WorkingDirectory=/home/ksmiti/miaou-ai
+ExecStart=/usr/bin/xinit /home/ksmiti/miaou-ai/miaou-ai -- :0 vt1 -nocursor
 Restart=always
 RestartSec=2
 
