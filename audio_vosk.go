@@ -7,8 +7,10 @@ package main
 // server available. Test on real hardware before relying on it.
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/gen2brain/malgo"
@@ -19,6 +21,9 @@ type VoskAudio struct {
 	serverURL  string
 	sampleRate int
 	timeout    time.Duration
+
+	silenceThreshold int32
+	silenceHangover  time.Duration
 
 	malgoCtx *malgo.AllocatedContext
 }
@@ -31,10 +36,12 @@ func NewVoskAudio(cfg *Config) (*VoskAudio, error) {
 
 	fmt.Printf("✅ Audio Manager ready (Vosk Server: %s)\n", cfg.VoskServerURL)
 	return &VoskAudio{
-		serverURL:  cfg.VoskServerURL,
-		sampleRate: cfg.SampleRate,
-		timeout:    time.Duration(cfg.ListeningTimeout) * time.Second,
-		malgoCtx:   ctx,
+		serverURL:        cfg.VoskServerURL,
+		sampleRate:       cfg.SampleRate,
+		timeout:          time.Duration(cfg.ListeningTimeout) * time.Second,
+		silenceThreshold: int32(cfg.VADSilenceThreshold),
+		silenceHangover:  time.Duration(cfg.VADSilenceMs) * time.Millisecond,
+		malgoCtx:         ctx,
 	}, nil
 }
 
@@ -70,16 +77,46 @@ func (v *VoskAudio) Listen() (string, bool) {
 	return text, true
 }
 
+// peakAmplitude returns the largest sample magnitude in a chunk of
+// little-endian S16 PCM, used as a cheap voice-activity signal.
+func peakAmplitude(pcm []byte) int32 {
+	var peak int32
+	for i := 0; i+1 < len(pcm); i += 2 {
+		s := int32(int16(binary.LittleEndian.Uint16(pcm[i:])))
+		if s < 0 {
+			s = -s
+		}
+		if s > peak {
+			peak = s
+		}
+	}
+	return peak
+}
+
 func (v *VoskAudio) recordAudio() ([]byte, error) {
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Capture)
 	deviceConfig.Capture.Format = malgo.FormatS16
 	deviceConfig.Capture.Channels = 1
 	deviceConfig.SampleRate = uint32(v.sampleRate)
 
-	var captured []byte
+	var (
+		mu          sync.Mutex
+		captured    []byte
+		lastVoiceAt = time.Now()
+		voiceHeard  bool
+	)
+
 	callbacks := malgo.DeviceCallbacks{
 		Data: func(_, pSample []byte, _ uint32) {
+			loud := peakAmplitude(pSample) > v.silenceThreshold
+
+			mu.Lock()
 			captured = append(captured, pSample...)
+			if loud {
+				lastVoiceAt = time.Now()
+				voiceHeard = true
+			}
+			mu.Unlock()
 		},
 	}
 
@@ -93,11 +130,29 @@ func (v *VoskAudio) recordAudio() ([]byte, error) {
 	if err := device.Start(); err != nil {
 		return nil, fmt.Errorf("start capture: %w", err)
 	}
-	time.Sleep(v.timeout)
+
+	// Stop as soon as speech is followed by enough silence, instead of
+	// always recording the full ListeningTimeout — that timeout stays as
+	// the hard cap for someone who just keeps talking.
+	deadline := time.Now().Add(v.timeout)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	for now := range ticker.C {
+		mu.Lock()
+		spoke, silentFor := voiceHeard, now.Sub(lastVoiceAt)
+		mu.Unlock()
+
+		if now.After(deadline) || (spoke && silentFor > v.silenceHangover) {
+			break
+		}
+	}
+	ticker.Stop()
+
 	if err := device.Stop(); err != nil {
 		return nil, fmt.Errorf("stop capture: %w", err)
 	}
 
+	mu.Lock()
+	defer mu.Unlock()
 	return captured, nil
 }
 
@@ -106,7 +161,13 @@ func (v *VoskAudio) transcribe(audio []byte) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("connect to vosk server: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		// A clean close handshake (vs. a bare conn.Close(), which just drops
+		// the TCP connection) avoids "no close frame received" errors on the
+		// server if it's still mid-response when we're done with it.
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+		conn.Close()
+	}()
 
 	resultCh := make(chan string, 1)
 	go func() {
@@ -145,7 +206,7 @@ func (v *VoskAudio) transcribe(audio []byte) (string, error) {
 	select {
 	case text := <-resultCh:
 		return text, nil
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		return "", nil
 	}
 }
