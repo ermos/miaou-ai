@@ -31,6 +31,7 @@ type WhisperAudio struct {
 	apiURL     string
 	apiKey     string
 	model      string
+	language   string // ISO-639-1 hint, e.g. "en"; empty lets the API guess
 	httpClient *http.Client
 
 	sampleRate int
@@ -54,6 +55,7 @@ func NewWhisperAudio(cfg *Config) (*WhisperAudio, error) {
 		apiURL:           cfg.LLMURL + "/audio/transcriptions",
 		apiKey:           cfg.OpenAIAPIKey,
 		model:            cfg.WhisperModel,
+		language:         cfg.WhisperLanguage,
 		httpClient:       &http.Client{Timeout: 30 * time.Second},
 		sampleRate:       cfg.SampleRate,
 		timeout:          time.Duration(cfg.ListeningTimeout) * time.Second,
@@ -207,9 +209,7 @@ func (w *WhisperAudio) recordAudio() ([]byte, bool, error) {
 }
 
 // transcribe uploads the captured PCM (wrapped as a WAV file) to OpenAI's
-// /audio/transcriptions endpoint. No language is forced: this model's
-// language auto-detection is far more reliable than a local tiny model's,
-// so there's no need to race English/French candidates against each other.
+// /audio/transcriptions endpoint.
 func (w *WhisperAudio) transcribe(pcm []byte) (string, error) {
 	wavPath, err := writeWAV(pcm, w.sampleRate)
 	if err != nil {
@@ -234,6 +234,14 @@ func (w *WhisperAudio) transcribe(pcm []byte) (string, error) {
 	}
 	if err := writer.WriteField("model", w.model); err != nil {
 		return "", fmt.Errorf("build request: %w", err)
+	}
+	if w.language != "" {
+		// Without this hint, the API occasionally drifts into translating
+		// the audio instead of transcribing it (see the language field's
+		// doc comment on Config) — forcing a language keeps it faithful.
+		if err := writer.WriteField("language", w.language); err != nil {
+			return "", fmt.Errorf("build request: %w", err)
+		}
 	}
 	if err := writer.Close(); err != nil {
 		return "", fmt.Errorf("build request: %w", err)

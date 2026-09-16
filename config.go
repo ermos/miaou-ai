@@ -22,6 +22,14 @@ type Config struct {
 	TTSVoice   string // path to the piper .onnx voice model
 
 	WhisperModel string // OpenAI transcription model name, e.g. "whisper-1"
+	// Without a language hint, OpenAI's transcription endpoint occasionally
+	// drifts into translating the audio to another language instead of
+	// transcribing it (a documented quirk, observed live: faithful English
+	// -> French translations instead of English text). Forcing one avoids
+	// it, at the cost of not properly supporting the other — set to "fr"
+	// to prioritize French input instead, or "" to accept the drift risk
+	// in exchange for both languages.
+	WhisperLanguage string
 
 	AudioMode string // "text_input" or "whisper"
 
@@ -108,7 +116,8 @@ func LoadConfig() *Config {
 		VADSilenceThreshold: getenvInt("VAD_SILENCE_THRESHOLD", 500),
 		VADSilenceMs:        getenvInt("VAD_SILENCE_MS", 1200),
 
-		WhisperModel: getenv("OPENAI_WHISPER_MODEL", "whisper-1"),
+		WhisperModel:    getenv("OPENAI_WHISPER_MODEL", "whisper-1"),
+		WhisperLanguage: getenv("OPENAI_WHISPER_LANGUAGE", "en"),
 
 		MemoryDir:       filepath.Join(root, getenv("MEMORY_DIR", "memory")),
 		PersonalityFile: filepath.Join(root, getenv("PERSONALITY_FILE", "PERSONALITY.md")),
