@@ -1,0 +1,342 @@
+# 🐱 English Buddy - Miaou
+
+A cute English learning chat buddy written in Go, powered by the OpenAI API and featuring:
+- Wake word detection ("miaou")
+- Context memory (7 days)
+- Editable personality config
+- Animated cat face (image-based)
+- French→English learning assistance
+- Pronunciation help
+- Local, realistic text-to-speech via Piper (no cloud TTS)
+
+> This project was originally written in Python; that version is kept for reference in `python_legacy/` but is no longer maintained.
+
+---
+
+## 📋 Requirements
+
+### Software
+- Go 1.22+
+- Python 3.11+ (only used to run Piper TTS via a small dedicated venv — see below)
+- macOS (audio playback currently uses `afplay`; swap for `aplay` to run on Linux/Raspberry Pi)
+- An OpenAI API key
+
+### Hardware (for a physical device build)
+- Raspberry Pi 4 (2GB+ RAM)
+- USB microphone (for `AUDIO_MODE=vosk_server`)
+- Mini 3.5" display (320x240 SPI)
+- USB speakers
+- A running [Vosk server](SERVER_SETUP.md) if using real microphone input
+
+---
+
+## 🚀 Installation
+
+### 1. Set up the Piper TTS engine (local, one-time)
+
+```bash
+python3.11 -m venv tts_engine/venv
+source tts_engine/venv/bin/activate
+pip install piper-tts
+deactivate
+
+# Download the voice model (female, US English, medium quality)
+mkdir -p assets/piper
+curl -sL "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx" -o assets/piper/en_US-amy-medium.onnx
+curl -sL "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json" -o assets/piper/en_US-amy-medium.onnx.json
+```
+
+### 2. Configure
+
+```bash
+nano .env
+# Set OPENAI_API_KEY, and AUDIO_MODE (text_input to test from the keyboard,
+# vosk_server for a real microphone + Vosk server)
+```
+
+### 3. Build
+
+```bash
+go build -o english-buddy .
+```
+
+### 4. (Optional) Auto-start on Boot
+
+```bash
+# Create systemd service
+sudo nano /etc/systemd/system/miaou.service
+```
+
+```ini
+[Unit]
+Description=Miaou - English Buddy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/english-buddy
+ExecStart=/home/pi/english-buddy/english-buddy
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable miaou.service
+sudo systemctl start miaou.service
+
+# Check status
+sudo systemctl status miaou.service
+```
+
+---
+
+## 💬 Usage
+
+### Start the Chat
+
+```bash
+./english-buddy
+```
+
+The app will:
+1. Connect to the OpenAI API
+2. Show an animated cat face in a window
+3. Wait for you to say (or type) "miaou"
+4. Start a conversation in English
+
+### Talking to Miaou
+
+1. **Say "miaou"** to wake it up
+2. **Speak in English** - if you speak French, Miaou will help
+3. **Chat naturally** - ask questions, tell about your day
+4. **Stop talking** - after 5 minutes of inactivity, Miaou goes to sleep
+
+### What Miaou Does
+
+✅ **Learns about you** - Asks about your day, friends, interests
+✅ **Helps pronunciation** - Detects speech errors and helps gently
+✅ **Encourages English** - Translates French to English
+✅ **Remembers context** - Keeps 7 days of conversation history
+✅ **Shows emotion** - Animated eyes and mouth react to mood
+
+---
+
+## 🎨 Customizing Personality
+
+All behavior is defined in `PERSONALITY.md` - **no coding needed!**
+
+### Edit Behavior
+
+```bash
+nano PERSONALITY.md
+```
+
+### Available Settings
+
+- **Correction Level**: How strict with grammar mistakes
+- **English Enforcement**: How much to push English
+- **Question Frequency**: How often to ask engaging questions
+- **Emoji Level**: How many emojis to use
+
+### Example Modifications
+
+**Make Miaou stricter:**
+```markdown
+CORRECTION_LEVEL: 60  # Was 30
+```
+
+**Add new question:**
+```markdown
+- "What's your favorite sport?"
+```
+
+**Change personality:**
+Edit sections in PERSONALITY.md directly
+
+**Restart to apply changes:**
+```bash
+./english-buddy
+```
+
+---
+
+## 📁 Project Structure
+
+```
+english-buddy/
+├── main.go                    # Start here! Wires everything together
+├── config.go                  # Configuration constants (.env)
+├── personality.go             # Load PERSONALITY.md
+├── face.go                    # ebiten window + face rendering
+├── brain.go                   # Animation state machine (blink timing)
+├── audio.go / audio_vosk.go   # Text input / mic + Vosk server
+├── llm.go                     # OpenAI integration
+├── context.go                 # Memory + sessions
+├── wakeword.go                # "Miaou" detection/extraction
+├── tts.go                     # Piper TTS + afplay playback
+├── assets/                    # Cat face images + Piper voice model
+├── tts_engine/venv/           # Dedicated Python venv running Piper
+├── PERSONALITY.md             # ← Edit this! (no code)
+├── memory/                    # Session storage (auto-created)
+│   ├── 2026-09-13.json
+│   ├── 2026-09-12.json
+│   └── memory_condensed.txt
+├── python_legacy/             # Original Python implementation (reference only)
+└── README.md                  # This file
+```
+
+---
+
+## 🧠 Memory System
+
+Miaou remembers conversations:
+
+### Daily Sessions
+Each day's conversations saved in `memory/YYYY-MM-DD.json`
+
+### 7-Day Memory
+Last 7 days kept automatically (older sessions deleted)
+
+### Condensed Memory
+Compact summary (1000 chars) used for LLM context
+
+### Ask About Memory
+```
+User: "What did we talk about yesterday?"
+Miaou: [Retrieves and summarizes from memory]
+```
+
+---
+
+## 🔧 Troubleshooting
+
+### "Cannot connect to OpenAI"
+- Check `OPENAI_API_KEY` in `.env`
+- Test: `curl https://api.openai.com/v1/models -H "Authorization: Bearer $OPENAI_API_KEY"`
+
+### No audio output / TTS errors
+- Check speakers are connected, and check volume in `.env` (`TTS_VOLUME`)
+- Test Piper directly: `echo "hello" | tts_engine/venv/bin/python3 -m piper -m assets/piper/en_US-amy-medium.onnx -f /tmp/test.wav && afplay /tmp/test.wav`
+- On Linux/Raspberry Pi, replace `afplay` with `aplay` in `tts.go`
+
+### Micro not working (vosk_server mode)
+- Test: `arecord -d 3 test.wav` then `aplay test.wav`
+- Make sure a Vosk server is running and reachable at `VOSK_SERVER_URL` (see [SERVER_SETUP.md](SERVER_SETUP.md))
+
+### High latency/slow responses
+- Check network: `ping api.openai.com`
+- Try a smaller/faster model in `.env` (`OPENAI_MODEL=gpt-4o-mini`)
+
+### Wake word not detected
+- Speak clearly: "MIIIIAOOOUUU"
+- Check microphone input: `arecord -d 3 test.wav`
+- Try louder or closer to mic
+
+---
+
+## 📊 Performance Tips
+
+### Reduce latency
+- Reduce `LLM_TEMPERATURE` in `.env` (doesn't affect latency much, but keep it tuned)
+- Try `OPENAI_MODEL=gpt-4o-mini` (faster/cheaper than larger models)
+- Optimize network (wired connection if possible)
+
+### Reduce RAM usage
+- Close other apps on RPi
+- Disable X11/GUI: run `sudo raspi-config`
+- Use Lite version of Raspberry Pi OS
+
+### Better responses
+- Try a stronger `OPENAI_MODEL`
+- Fine-tune PERSONALITY.md for your needs
+
+---
+
+## 🎯 Example Conversations
+
+### Learning English
+```
+You: "Miaou"
+Miaou: "Hello! How are you today? 😊"
+
+You: "I'm happy, I played football"
+Miaou: "That's amazing! ⚽ Did you have fun?
+Tell me about the game! 🎮"
+
+You: "We win three zero"
+Miaou: "Great! We SAY 'We won three-zero' 🎉
+Can you try: 'We won 3-0'?
+Who scored the goals? 😊"
+```
+
+### Pronunciation Help
+```
+You: (bad accent) "I hab a khat"
+Miaou: "Good try! 🐱
+'Have' sounds like 'hav' - and 'cat' is 'kat'
+So: 'I HAVE a CAT'
+Can you try again? 😊"
+```
+
+### Following Up
+```
+You: "I like pizza"
+Miaou: "Yum! Pizza is delicious! 🍕
+What's your favorite topping?
+Do you like cheese? Pepperoni?"
+```
+
+---
+
+## 🐛 Debugging
+
+### Enable debug logging
+Set `DEBUG=True` in `.env`.
+
+### Check logs
+```bash
+./english-buddy > debug.log 2>&1
+tail -f debug.log
+```
+
+### Run the test suite
+```bash
+go test ./...
+```
+
+---
+
+## 📝 License
+
+Free to use and modify!
+
+---
+
+## 🤝 Contributing
+
+Found a bug? Have an idea? Edit and improve!
+
+---
+
+## 🙏 Thanks
+
+Built with:
+- OpenAI API (LLM)
+- Vosk (speech recognition)
+- Ebiten (graphics)
+- Piper (local text-to-speech)
+
+---
+
+## 🐱 Have fun learning English with Miaou!
+
+Questions? Problems? Check PERSONALITY.md for tips on how to customize Miaou to your needs.
+
+Happy chatting! 😊
+# miaou-ai
