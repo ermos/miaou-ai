@@ -6,8 +6,9 @@ PIPER_VERSION := 2023.11.14-2
 # piper's release naming (aarch64) only matches PI_ARCH=arm64; that's the default and
 # the only one wired up here, add an armv7l mapping if you ever target a 32-bit Pi OS.
 PIPER_URL    := https://github.com/rhasspy/piper/releases/download/$(PIPER_VERSION)/piper_linux_aarch64.tar.gz
+WHISPER_MODEL ?= tiny-q5_1
 
-.PHONY: build-pi fetch-piper package clean
+.PHONY: build-pi fetch-piper build-whisper package clean
 
 # Downloads the native Piper TTS engine (C++ binary, no Python) for Linux/arm64
 # into assets/piper/, alongside the .onnx voice model already there.
@@ -15,6 +16,23 @@ fetch-piper:
 	@if [ -x assets/piper/piper ]; then echo "piper already present, skipping"; exit 0; fi
 	mkdir -p assets/piper
 	curl -sL $(PIPER_URL) | tar -xz -C assets/piper --strip-components=1
+
+# whisper.cpp ships no prebuilt binaries, so unlike fetch-piper this builds
+# from source — run it ON the target machine (native compile; cross-compiling
+# C++ for arm64 from macOS via Docker/QEMU is impractically slow for a project
+# this size). Multilingual model (no .en suffix): whisper.cpp detects the
+# spoken language itself, so one model handles English and French alike.
+build-whisper:
+	@if [ -x assets/whisper/whisper-cli ]; then echo "whisper-cli already present, skipping"; exit 0; fi
+	rm -rf /tmp/whisper-build
+	git clone --depth 1 https://github.com/ggml-org/whisper.cpp /tmp/whisper-build
+	cmake -B /tmp/whisper-build/build -S /tmp/whisper-build
+	cmake --build /tmp/whisper-build/build -j --config Release
+	mkdir -p assets/whisper
+	cp /tmp/whisper-build/build/bin/whisper-cli assets/whisper/whisper-cli
+	sh /tmp/whisper-build/models/download-ggml-model.sh $(WHISPER_MODEL) /tmp/whisper-build/models
+	cp /tmp/whisper-build/models/ggml-$(WHISPER_MODEL).bin assets/whisper/
+	rm -rf /tmp/whisper-build
 
 build-pi:
 	mkdir -p $(DIST)

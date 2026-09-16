@@ -4,7 +4,6 @@ go 1.25.0
 
 require (
 	github.com/gen2brain/malgo v0.11.26
-	github.com/gorilla/websocket v1.5.3
 	github.com/hajimehoshi/ebiten/v2 v2.9.2
 	github.com/joho/godotenv v1.5.1
 )

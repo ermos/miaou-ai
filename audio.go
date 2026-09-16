@@ -38,9 +38,9 @@ func NewAudioManager(cfg *Config) (AudioManager, error) {
 	switch cfg.AudioMode {
 	case "text_input":
 		return NewTextAudio(), nil
-	case "vosk_server":
-		return NewVoskAudio(cfg)
+	case "whisper":
+		return NewWhisperAudio(cfg)
 	default:
-		return nil, fmt.Errorf("unknown AUDIO_MODE: %s (use 'vosk_server' or 'text_input')", cfg.AudioMode)
+		return nil, fmt.Errorf("unknown AUDIO_MODE: %s (use 'whisper' or 'text_input')", cfg.AudioMode)
 	}
 }
