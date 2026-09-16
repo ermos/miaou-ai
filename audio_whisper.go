@@ -65,7 +65,7 @@ func NewWhisperAudio(cfg *Config) (*WhisperAudio, error) {
 }
 
 func (w *WhisperAudio) Listen() (string, bool) {
-	audio, err := w.recordAudio()
+	audio, spoke, err := w.recordAudio()
 	if err != nil {
 		fmt.Printf("❌ Recording error: %v\n", err)
 		// ponytail: a broken mic/ALSA config fails here instantly and
@@ -74,6 +74,12 @@ func (w *WhisperAudio) Listen() (string, bool) {
 		// blocking for at least some audio, so this only slows down the
 		// broken-device case.
 		time.Sleep(time.Second)
+		return "", true
+	}
+	if !spoke {
+		// Nothing crossed VAD_SILENCE_THRESHOLD for the whole listening
+		// window (the idle/no-one-talking case) — sending silence to a
+		// paid transcription API on every cycle would bill for nothing.
 		return "", true
 	}
 
@@ -102,7 +108,7 @@ func peakAmplitude(pcm []byte) int32 {
 	return peak
 }
 
-func (w *WhisperAudio) recordAudio() ([]byte, error) {
+func (w *WhisperAudio) recordAudio() ([]byte, bool, error) {
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Capture)
 	deviceConfig.Capture.Format = malgo.FormatS16
 	deviceConfig.Capture.Channels = 1
@@ -134,13 +140,13 @@ func (w *WhisperAudio) recordAudio() ([]byte, error) {
 
 	device, err := malgo.InitDevice(w.malgoCtx.Context, deviceConfig, callbacks)
 	if err != nil {
-		return nil, fmt.Errorf("init capture device: %w", err)
+		return nil, false, fmt.Errorf("init capture device: %w", err)
 	}
 	defer device.Uninit()
 
 	fmt.Println("🎤 Listening (speak now)...")
 	if err := device.Start(); err != nil {
-		return nil, fmt.Errorf("start capture: %w", err)
+		return nil, false, fmt.Errorf("start capture: %w", err)
 	}
 
 	// Stop as soon as speech is followed by enough silence, instead of
@@ -167,12 +173,12 @@ func (w *WhisperAudio) recordAudio() ([]byte, error) {
 	ticker.Stop()
 
 	if err := device.Stop(); err != nil {
-		return nil, fmt.Errorf("stop capture: %w", err)
+		return nil, false, fmt.Errorf("stop capture: %w", err)
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
-	return captured, nil
+	return captured, voiceHeard, nil
 }
 
 // transcribe uploads the captured PCM (wrapped as a WAV file) to OpenAI's
