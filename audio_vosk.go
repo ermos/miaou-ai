@@ -51,12 +51,20 @@ func (v *VoskAudio) Listen() (string, bool) {
 	audio, err := v.recordAudio()
 	if err != nil {
 		fmt.Printf("❌ Recording error: %v\n", err)
+		// ponytail: a broken mic/ALSA config fails here instantly and
+		// unconditionally on every call; without a pause the caller's loop
+		// retries at full speed and pegs the CPU (seen: 300%+, starving
+		// the render loop). A real capture starts by blocking on
+		// device.Start() for the full listening timeout, so this only
+		// slows down the broken-device case.
+		time.Sleep(time.Second)
 		return "", true
 	}
 
 	text, err := v.transcribe(audio)
 	if err != nil {
 		fmt.Printf("❌ Vosk error: %v\n", err)
+		time.Sleep(time.Second)
 		return "", true
 	}
 	return text, true

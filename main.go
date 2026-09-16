@@ -160,7 +160,15 @@ func main() {
 
 	ebiten.SetWindowSize(buddy.cfg.ScreenWidth, buddy.cfg.ScreenHeight)
 	ebiten.SetWindowTitle("Miaou - English Buddy")
-	ebiten.SetFullscreen(true)
+	ebiten.SetWindowDecorated(false)
+	// ponytail: real fullscreen (SetFullscreen) asks GLFW to center the
+	// window against the RandR/Xinerama monitor layout, which a plain
+	// fbdev X driver (no RandR outputs) doesn't provide — GLFW's fallback
+	// math lands the window at a huge bogus negative offset, fully
+	// offscreen. There's no window manager here to share the screen with,
+	// so just size the window to match the physical panel and pin it at
+	// the origin instead of asking for fullscreen.
+	ebiten.SetWindowPosition(0, 0)
 	if err := ebiten.RunGame(face); err != nil {
 		fmt.Printf("❌ Display error: %v\n", err)
 	}
