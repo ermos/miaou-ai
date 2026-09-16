@@ -77,6 +77,9 @@ func (b *ChatBuddy) runConversationLoop() {
 			if !ok {
 				return
 			}
+			if text != "" {
+				fmt.Printf("👂 Heard: %q\n", text)
+			}
 			if text == "" || !containsWakeWord(text, b.cfg.WakeWord) {
 				continue
 			}
