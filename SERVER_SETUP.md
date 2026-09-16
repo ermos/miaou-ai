@@ -62,6 +62,8 @@ or set it up as a systemd service below.
 
 ## 🔁 Auto-start on boot (crash-resistant)
 
+Replace `pi` below with your actual Linux username (check with `whoami`):
+
 ```bash
 sudo nano /etc/systemd/system/vosk-server.service
 ```
@@ -74,10 +76,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=ksmiti
-WorkingDirectory=/home/ksmiti/vosk-server
+User=pi
+WorkingDirectory=/home/pi/vosk-server
 Environment=VOSK_SAMPLE_RATE=16000
-ExecStart=/home/ksmiti/vosk-server/venv/bin/python3 asr_server.py model
+ExecStart=/home/pi/vosk-server/venv/bin/python3 asr_server.py model
 Restart=always
 RestartSec=2
 
