@@ -117,6 +117,7 @@ func (b *ChatBuddy) runConversationLoop() {
 }
 
 func (b *ChatBuddy) processInput(userText string) {
+	fmt.Printf("👂 Heard: %q\n", userText)
 	b.brain.SetState(StateProcessing)
 
 	response := b.llm.Chat(userText)
