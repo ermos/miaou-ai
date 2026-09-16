@@ -17,7 +17,7 @@ A cute English learning chat buddy written in Go, powered by the OpenAI API and 
 
 ### Software
 - Go 1.22+
-- Python 3.11+ (only used to run Piper TTS via a small dedicated venv — see below)
+- Docker (only for cross-compiling to the Raspberry Pi via `make package`, see below)
 - macOS (audio playback currently uses `afplay`; swap for `aplay` to run on Linux/Raspberry Pi)
 - An OpenAI API key
 
@@ -34,14 +34,13 @@ A cute English learning chat buddy written in Go, powered by the OpenAI API and 
 
 ### 1. Set up the Piper TTS engine (local, one-time)
 
+Piper runs as a native binary (no Python) via `make fetch-piper`, which pulls
+the Linux/arm64 build into `assets/piper/`:
+
 ```bash
-python3.11 -m venv tts_engine/venv
-source tts_engine/venv/bin/activate
-pip install piper-tts
-deactivate
+make fetch-piper
 
 # Download the voice model (female, US English, medium quality)
-mkdir -p assets/piper
 curl -sL "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx" -o assets/piper/en_US-amy-medium.onnx
 curl -sL "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json" -o assets/piper/en_US-amy-medium.onnx.json
 ```
@@ -57,29 +56,40 @@ nano .env
 ### 3. Build
 
 ```bash
-go build -o english-buddy .
+go build -o miaou-ai .
 ```
 
-### 4. (Optional) Auto-start on Boot
+Or cross-compile and package for the Pi from your dev machine with `make package` (see `Makefile`).
+
+### 4. Auto-start on boot (kiosk mode, crash-resistant)
+
+The app needs a graphical session (ebiten/GLFW, built against X11) — install a
+minimal X server, no desktop environment required:
 
 ```bash
-# Create systemd service
-sudo nano /etc/systemd/system/miaou.service
+sudo apt install --no-install-recommends xserver-xorg xinit
+```
+
+Then let systemd own the whole X session: it starts on boot and restarts
+automatically if the app (or X) crashes.
+
+```bash
+sudo nano /etc/systemd/system/miaou-ai.service
 ```
 
 ```ini
 [Unit]
-Description=Miaou - English Buddy
+Description=Miaou AI - kiosk display
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi/english-buddy
-ExecStart=/home/pi/english-buddy/english-buddy
+WorkingDirectory=/home/pi/miaou-ai
+ExecStart=/usr/bin/xinit /home/pi/miaou-ai/miaou-ai -- :0 vt1 -nocursor
 Restart=always
-RestartSec=10
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target
@@ -87,11 +97,11 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable miaou.service
-sudo systemctl start miaou.service
+sudo systemctl enable --now miaou-ai.service
 
-# Check status
-sudo systemctl status miaou.service
+# Check status / live logs
+sudo systemctl status miaou-ai.service
+journalctl -u miaou-ai.service -f
 ```
 
 ---
@@ -101,7 +111,7 @@ sudo systemctl status miaou.service
 ### Start the Chat
 
 ```bash
-./english-buddy
+./miaou-ai
 ```
 
 The app will:
@@ -161,7 +171,7 @@ Edit sections in PERSONALITY.md directly
 
 **Restart to apply changes:**
 ```bash
-./english-buddy
+./miaou-ai
 ```
 
 ---
@@ -169,19 +179,18 @@ Edit sections in PERSONALITY.md directly
 ## 📁 Project Structure
 
 ```
-english-buddy/
+miaou-ai/
 ├── main.go                    # Start here! Wires everything together
 ├── config.go                  # Configuration constants (.env)
 ├── personality.go             # Load PERSONALITY.md
 ├── face.go                    # ebiten window + face rendering
-├── brain.go                   # Animation state machine (blink timing)
+├── brain.go                   # Animation state machine (blink + mouth timing)
 ├── audio.go / audio_vosk.go   # Text input / mic + Vosk server
 ├── llm.go                     # OpenAI integration
 ├── context.go                 # Memory + sessions
 ├── wakeword.go                # "Miaou" detection/extraction
-├── tts.go                     # Piper TTS + afplay playback
-├── assets/                    # Cat face images + Piper voice model
-├── tts_engine/venv/           # Dedicated Python venv running Piper
+├── tts.go                     # Native Piper binary + afplay/aplay playback
+├── assets/                    # Cat face images + Piper binary/voice model (make fetch-piper)
 ├── PERSONALITY.md             # ← Edit this! (no code)
 ├── memory/                    # Session storage (auto-created)
 │   ├── 2026-09-13.json
@@ -221,9 +230,8 @@ Miaou: [Retrieves and summarizes from memory]
 - Test: `curl https://api.openai.com/v1/models -H "Authorization: Bearer $OPENAI_API_KEY"`
 
 ### No audio output / TTS errors
-- Check speakers are connected, and check volume in `.env` (`TTS_VOLUME`)
-- Test Piper directly: `echo "hello" | tts_engine/venv/bin/python3 -m piper -m assets/piper/en_US-amy-medium.onnx -f /tmp/test.wav && afplay /tmp/test.wav`
-- On Linux/Raspberry Pi, replace `afplay` with `aplay` in `tts.go`
+- Check speakers are connected, and check volume in `.env` (`TTS_VOLUME`, macOS only — on Linux, set the level with `alsamixer`)
+- Test Piper directly: `echo "hello" | LD_LIBRARY_PATH=assets/piper assets/piper/piper -m assets/piper/en_US-amy-medium.onnx -f /tmp/test.wav --espeak_data assets/piper/espeak-ng-data && aplay /tmp/test.wav` (use `afplay` instead of `aplay` on macOS)
 
 ### Micro not working (vosk_server mode)
 - Test: `arecord -d 3 test.wav` then `aplay test.wav`
@@ -301,7 +309,7 @@ Set `DEBUG=True` in `.env`.
 
 ### Check logs
 ```bash
-./english-buddy > debug.log 2>&1
+./miaou-ai > debug.log 2>&1
 tail -f debug.log
 ```
 
@@ -339,4 +347,3 @@ Built with:
 Questions? Problems? Check PERSONALITY.md for tips on how to customize Miaou to your needs.
 
 Happy chatting! 😊
-# miaou-ai
