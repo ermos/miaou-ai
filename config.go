@@ -31,6 +31,15 @@ type Config struct {
 	InactivityTimeout int // seconds
 	ListeningTimeout  int // seconds
 
+	// Voice-activity detection: stop recording once speech has been heard
+	// followed by this much silence, instead of always waiting the full
+	// ListeningTimeout. VADSilenceThreshold is a peak PCM amplitude
+	// (0-32767) below which a chunk counts as silence — mic gain and
+	// ambient noise vary per device, so this needs to be tunable rather
+	// than a fixed constant.
+	VADSilenceThreshold int
+	VADSilenceMs        int
+
 	MemoryDir       string
 	PersonalityFile string
 	AssetsDir       string
@@ -95,6 +104,9 @@ func LoadConfig() *Config {
 
 		InactivityTimeout: getenvInt("INACTIVITY_TIMEOUT", 300),
 		ListeningTimeout:  getenvInt("LISTENING_TIMEOUT", 30),
+
+		VADSilenceThreshold: getenvInt("VAD_SILENCE_THRESHOLD", 500),
+		VADSilenceMs:        getenvInt("VAD_SILENCE_MS", 1200),
 
 		MemoryDir:       filepath.Join(root, getenv("MEMORY_DIR", "memory")),
 		PersonalityFile: filepath.Join(root, getenv("PERSONALITY_FILE", "PERSONALITY.md")),
