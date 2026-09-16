@@ -32,6 +32,15 @@ curl -o ~/vosk-server/asr_server.py \
   https://raw.githubusercontent.com/alphacep/vosk-server/master/websocket/asr_server.py
 ```
 
+The script still uses the old `websockets` handler signature
+(`recognize(websocket, path)`); recent `websockets` (10+) dropped the `path`
+argument and calling the handler then raises `TypeError: recognize() missing
+1 required positional argument: 'path'` on every connection. Patch it:
+
+```bash
+sed -i 's/async def recognize(websocket, path):/async def recognize(websocket):/' ~/vosk-server/asr_server.py
+```
+
 ### 3. Download a model
 
 The small English model is enough for this use case and light on RAM:
