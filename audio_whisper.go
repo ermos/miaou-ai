@@ -7,9 +7,11 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -148,11 +150,27 @@ func (w *WhisperAudio) recordAudio() ([]byte, error) {
 	return captured, nil
 }
 
-// transcribe runs whisper.cpp on the captured PCM. whisper-cli only reads
-// audio files, so the raw S16LE mono capture is wrapped in a minimal WAV
-// header first. Language is left on "auto" — whisper.cpp detects it itself,
-// unlike Vosk's fixed per-model vocabulary, so this one binary handles both
-// English and French without running separate servers per language.
+// whisperOutput mirrors the subset of whisper-cli's -ojf (full JSON) output
+// this cares about: the recognized text and, per token, its probability
+// ("p"), used as a confidence signal. Unlisted fields (timestamps, model
+// info, ...) are simply ignored by json.Unmarshal.
+type whisperOutput struct {
+	Transcription []struct {
+		Text   string `json:"text"`
+		Tokens []struct {
+			P float64 `json:"p"`
+		} `json:"tokens"`
+	} `json:"transcription"`
+}
+
+// transcribe runs whisper.cpp twice on the captured PCM, once forced to
+// English and once to French, and keeps whichever whisper itself was more
+// confident about (mean per-token probability). whisper.cpp's own "auto"
+// language detection picks from ~100 languages off a single short/noisy
+// clip and a tiny model — observed live returning Russian gibberish for a
+// French sentence. Since only these two languages actually matter here,
+// forcing both candidates and picking the better score is far more robust
+// than trusting one open-ended guess.
 func (w *WhisperAudio) transcribe(pcm []byte) (string, error) {
 	wavPath, err := writeWAV(pcm, w.sampleRate)
 	if err != nil {
@@ -160,15 +178,80 @@ func (w *WhisperAudio) transcribe(pcm []byte) (string, error) {
 	}
 	defer func() { _ = os.Remove(wavPath) }()
 
-	cmd := exec.Command(w.whisperBin, "-m", w.modelPath, "-f", wavPath, "-l", "auto", "-nt", "-np")
-	out, err := cmd.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("whisper-cli: %w: %s", err, exitErr.Stderr)
-		}
-		return "", fmt.Errorf("whisper-cli: %w", err)
+	type result struct {
+		text string
+		conf float64
+		err  error
 	}
-	return strings.TrimSpace(string(out)), nil
+	run := func(lang string) <-chan result {
+		ch := make(chan result, 1)
+		go func() {
+			text, conf, err := w.transcribeLang(wavPath, lang)
+			ch <- result{text, conf, err}
+		}()
+		return ch
+	}
+
+	en, fr := <-run("en"), <-run("fr")
+
+	switch {
+	case en.err != nil && fr.err != nil:
+		return "", en.err
+	case en.err != nil:
+		return fr.text, nil
+	case fr.err != nil:
+		return en.text, nil
+	case en.text == "":
+		return fr.text, nil
+	case fr.text == "":
+		return en.text, nil
+	case fr.conf > en.conf:
+		return fr.text, nil
+	default:
+		return en.text, nil
+	}
+}
+
+func (w *WhisperAudio) transcribeLang(wavPath, lang string) (string, float64, error) {
+	outDir, err := os.MkdirTemp("", "miaou-whisper-*")
+	if err != nil {
+		return "", 0, err
+	}
+	defer func() { _ = os.RemoveAll(outDir) }()
+	outBase := filepath.Join(outDir, "out")
+
+	cmd := exec.Command(w.whisperBin, "-m", w.modelPath, "-f", wavPath, "-l", lang, "-ojf", "-of", outBase, "-np", "-nt")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", 0, fmt.Errorf("whisper-cli (%s): %w: %s", lang, err, stderr.String())
+	}
+
+	data, err := os.ReadFile(outBase + ".json")
+	if err != nil {
+		return "", 0, fmt.Errorf("read whisper output (%s): %w", lang, err)
+	}
+	var parsed whisperOutput
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return "", 0, fmt.Errorf("parse whisper output (%s): %w", lang, err)
+	}
+
+	var text strings.Builder
+	var probSum float64
+	var probCount int
+	for _, seg := range parsed.Transcription {
+		text.WriteString(seg.Text)
+		for _, tok := range seg.Tokens {
+			probSum += tok.P
+			probCount++
+		}
+	}
+
+	var conf float64
+	if probCount > 0 {
+		conf = probSum / float64(probCount)
+	}
+	return strings.TrimSpace(text.String()), conf, nil
 }
 
 // writeWAV wraps raw S16LE mono PCM in a WAV container and returns the
