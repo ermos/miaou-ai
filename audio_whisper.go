@@ -115,11 +115,13 @@ func (w *WhisperAudio) recordAudio() ([]byte, bool, error) {
 	deviceConfig.SampleRate = uint32(w.sampleRate)
 
 	var (
-		mu          sync.Mutex
-		captured    []byte
-		lastVoiceAt = time.Now()
-		voiceHeard  bool
-		lastPeak    int32
+		mu           sync.Mutex
+		captured     []byte
+		lastVoiceAt  = time.Now()
+		voiceHeard   bool
+		lastPeak     int32
+		firstVoiceAt int // byte offset into captured of the first loud chunk
+		lastVoiceIdx int // byte offset just past the most recent loud chunk
 	)
 
 	callbacks := malgo.DeviceCallbacks{
@@ -128,11 +130,16 @@ func (w *WhisperAudio) recordAudio() ([]byte, bool, error) {
 			loud := peak > w.silenceThreshold
 
 			mu.Lock()
+			chunkStart := len(captured)
 			captured = append(captured, pSample...)
 			lastPeak = peak
 			if loud {
 				lastVoiceAt = time.Now()
+				if !voiceHeard {
+					firstVoiceAt = chunkStart
+				}
 				voiceHeard = true
+				lastVoiceIdx = len(captured)
 			}
 			mu.Unlock()
 		},
@@ -178,7 +185,25 @@ func (w *WhisperAudio) recordAudio() ([]byte, bool, error) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	return captured, voiceHeard, nil
+	if !voiceHeard {
+		return captured, false, nil
+	}
+
+	// Trim to just the speech, with a small margin on each side so the
+	// first/last word isn't clipped — sending the whole buffer including
+	// silence before the user started talking wastes upload time and bills
+	// for audio that isn't speech.
+	const margin = 300 * time.Millisecond
+	marginBytes := int(margin.Seconds() * float64(w.sampleRate) * 2) // S16 mono = 2 bytes/sample
+	start := firstVoiceAt - marginBytes
+	if start < 0 {
+		start = 0
+	}
+	end := lastVoiceIdx + marginBytes
+	if end > len(captured) {
+		end = len(captured)
+	}
+	return captured[start:end], true, nil
 }
 
 // transcribe uploads the captured PCM (wrapped as a WAV file) to OpenAI's
