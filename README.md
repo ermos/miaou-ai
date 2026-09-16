@@ -72,7 +72,7 @@ sudo apt install --no-install-recommends xserver-xorg xinit
 
 Then let systemd own the whole X session: it starts on boot and restarts
 automatically if the app (or X) crashes. Free up tty1 first (the service
-takes it over), and replace `ksmiti` below with your actual Linux username
+takes it over), and replace `pi` below with your actual Linux username
 (check with `whoami`) — a wrong `User=` fails with `status=217/USER`.
 
 ```bash
@@ -89,7 +89,7 @@ Conflicts=getty@tty1.service
 
 [Service]
 Type=simple
-User=ksmiti
+User=pi
 # PAMName+TTYPath register a real logind session on this tty, which is what
 # grants X permission to open the console (xf86OpenConsole) — a plain
 # ExecStart never gets that permission, no matter the user.
@@ -98,10 +98,14 @@ TTYPath=/dev/tty1
 TTYReset=yes
 TTYVHangup=yes
 TTYVTDisallocate=yes
+# AUDIO_MODE=text_input reads from stdin: with StandardInput=tty, a background
+# read on this tty gets SIGTTIN and freezes the *whole* process silently (no
+# crash, no log). Use vosk_server mode here, or set StandardInput=null to test
+# text_input without a controlling terminal (no keyboard input either way).
 StandardInput=tty
 StandardOutput=journal
-WorkingDirectory=/home/ksmiti/miaou-ai
-ExecStart=/usr/bin/xinit /home/ksmiti/miaou-ai/miaou-ai -- :0 vt1 -nocursor
+WorkingDirectory=/home/pi/miaou-ai
+ExecStart=/usr/bin/xinit /home/pi/miaou-ai/miaou-ai -- :0 vt1 -nocursor
 Restart=always
 RestartSec=2
 
