@@ -1,10 +1,10 @@
 # Go
+/miaou-ai
 /english-buddy
+/dist
 
-# Piper TTS (downloaded, not source)
-tts_engine/venv/
-assets/piper/*.onnx
-assets/piper/*.onnx.json
+# Piper TTS (downloaded via `make fetch-piper`, not source)
+assets/piper/*
 
 # Python (legacy)
 __pycache__/
