@@ -21,8 +21,7 @@ type Config struct {
 	TTSVolume  float64
 	TTSVoice   string // path to the piper .onnx voice model
 
-	WhisperBin   string // native whisper-cli executable (assets/whisper/whisper-cli)
-	WhisperModel string // assets/whisper/ggml-*.bin (multilingual model, auto-detects language)
+	WhisperModel string // OpenAI transcription model name, e.g. "whisper-1"
 
 	AudioMode string // "text_input" or "whisper"
 
@@ -109,6 +108,8 @@ func LoadConfig() *Config {
 		VADSilenceThreshold: getenvInt("VAD_SILENCE_THRESHOLD", 500),
 		VADSilenceMs:        getenvInt("VAD_SILENCE_MS", 1200),
 
+		WhisperModel: getenv("OPENAI_WHISPER_MODEL", "whisper-1"),
+
 		MemoryDir:       filepath.Join(root, getenv("MEMORY_DIR", "memory")),
 		PersonalityFile: filepath.Join(root, getenv("PERSONALITY_FILE", "PERSONALITY.md")),
 		AssetsDir:       filepath.Join(root, "assets"),
@@ -119,8 +120,6 @@ func LoadConfig() *Config {
 	cfg.TTSVoice = filepath.Join(cfg.AssetsDir, "piper", "en_US-amy-medium.onnx")
 	cfg.PiperBin = filepath.Join(cfg.AssetsDir, "piper", "piper")
 	cfg.PiperEspeakData = filepath.Join(cfg.AssetsDir, "piper", "espeak-ng-data")
-	cfg.WhisperBin = filepath.Join(cfg.AssetsDir, "whisper", "whisper-cli")
-	cfg.WhisperModel = filepath.Join(cfg.AssetsDir, "whisper", getenv("WHISPER_MODEL_FILE", "ggml-tiny-q5_1.bin"))
 
 	_ = os.MkdirAll(cfg.MemoryDir, 0o755)
 
