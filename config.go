@@ -10,10 +10,9 @@ import (
 )
 
 type Config struct {
-	VoskServerURL string
-	OpenAIAPIKey  string
-	OpenAIModel   string
-	LLMURL        string
+	OpenAIAPIKey string
+	OpenAIModel  string
+	LLMURL       string
 
 	ScreenWidth  int
 	ScreenHeight int
@@ -22,7 +21,10 @@ type Config struct {
 	TTSVolume  float64
 	TTSVoice   string // path to the piper .onnx voice model
 
-	AudioMode string // "text_input" or "vosk_server"
+	WhisperBin   string // native whisper-cli executable (assets/whisper/whisper-cli)
+	WhisperModel string // assets/whisper/ggml-*.bin (multilingual model, auto-detects language)
+
+	AudioMode string // "text_input" or "whisper"
 
 	LLMTemperature float64
 
@@ -85,10 +87,9 @@ func LoadConfig() *Config {
 	audioMode := strings.TrimSpace(getenv("AUDIO_MODE", "text_input"))
 
 	cfg := &Config{
-		VoskServerURL: getenv("VOSK_SERVER_URL", "ws://localhost:2700"),
-		OpenAIAPIKey:  getenv("OPENAI_API_KEY", ""),
-		OpenAIModel:   getenv("OPENAI_MODEL", "gpt-4o-mini"),
-		LLMURL:        "https://api.openai.com/v1",
+		OpenAIAPIKey: getenv("OPENAI_API_KEY", ""),
+		OpenAIModel:  getenv("OPENAI_MODEL", "gpt-4o-mini"),
+		LLMURL:       "https://api.openai.com/v1",
 
 		ScreenWidth:  getenvInt("SCREEN_WIDTH", 320),
 		ScreenHeight: getenvInt("SCREEN_HEIGHT", 240),
@@ -118,6 +119,8 @@ func LoadConfig() *Config {
 	cfg.TTSVoice = filepath.Join(cfg.AssetsDir, "piper", "en_US-amy-medium.onnx")
 	cfg.PiperBin = filepath.Join(cfg.AssetsDir, "piper", "piper")
 	cfg.PiperEspeakData = filepath.Join(cfg.AssetsDir, "piper", "espeak-ng-data")
+	cfg.WhisperBin = filepath.Join(cfg.AssetsDir, "whisper", "whisper-cli")
+	cfg.WhisperModel = filepath.Join(cfg.AssetsDir, "whisper", getenv("WHISPER_MODEL_FILE", "ggml-tiny-q5_1.bin"))
 
 	_ = os.MkdirAll(cfg.MemoryDir, 0o755)
 
