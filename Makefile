@@ -26,7 +26,10 @@ build-whisper:
 	@if [ -x assets/whisper/whisper-cli ]; then echo "whisper-cli already present, skipping"; exit 0; fi
 	rm -rf /tmp/whisper-build
 	git clone --depth 1 https://github.com/ggml-org/whisper.cpp /tmp/whisper-build
-	cmake -B /tmp/whisper-build/build -S /tmp/whisper-build
+	# Static build: whisper-cli otherwise links against libwhisper.so/libggml*.so
+	# built into scattered subdirectories, which then have to ship (and be found
+	# via LD_LIBRARY_PATH) alongside it. One self-contained binary is simpler.
+	cmake -B /tmp/whisper-build/build -S /tmp/whisper-build -DBUILD_SHARED_LIBS=OFF
 	cmake --build /tmp/whisper-build/build -j --config Release
 	mkdir -p assets/whisper
 	cp /tmp/whisper-build/build/bin/whisper-cli assets/whisper/whisper-cli
