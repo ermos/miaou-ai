@@ -23,10 +23,10 @@ A cute English learning chat buddy written in Go, powered by the OpenAI API and 
 
 ### Hardware (for a physical device build)
 - Raspberry Pi 4 (2GB+ RAM)
-- USB microphone (for `AUDIO_MODE=vosk_server`)
+- USB microphone (for `AUDIO_MODE=whisper`)
 - Mini 3.5" display (320x240 SPI)
 - USB speakers
-- A running [Vosk server](SERVER_SETUP.md) if using real microphone input
+- [whisper.cpp built locally](STT_SETUP.md) if using real microphone input
 
 ---
 
@@ -50,7 +50,7 @@ curl -sL "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/
 ```bash
 nano .env
 # Set OPENAI_API_KEY, and AUDIO_MODE (text_input to test from the keyboard,
-# vosk_server for a real microphone + Vosk server)
+# whisper for a real microphone via whisper.cpp — see STT_SETUP.md)
 ```
 
 ### 3. Build
@@ -100,7 +100,7 @@ TTYVHangup=yes
 TTYVTDisallocate=yes
 # AUDIO_MODE=text_input reads from stdin: with StandardInput=tty, a background
 # read on this tty gets SIGTTIN and freezes the *whole* process silently (no
-# crash, no log). Use vosk_server mode here, or set StandardInput=null to test
+# crash, no log). Use whisper mode here, or set StandardInput=null to test
 # text_input without a controlling terminal (no keyboard input either way).
 StandardInput=tty
 StandardOutput=journal
@@ -203,12 +203,12 @@ miaou-ai/
 ├── personality.go             # Load PERSONALITY.md
 ├── face.go                    # ebiten window + face rendering
 ├── brain.go                   # Animation state machine (blink + mouth timing)
-├── audio.go / audio_vosk.go   # Text input / mic + Vosk server
+├── audio.go / audio_whisper.go # Text input / mic + local whisper.cpp
 ├── llm.go                     # OpenAI integration
 ├── context.go                 # Memory + sessions
 ├── wakeword.go                # "Miaou" detection/extraction
 ├── tts.go                     # Native Piper binary + afplay/aplay playback
-├── assets/                    # Cat face images + Piper binary/voice model (make fetch-piper)
+├── assets/                    # Cat face images, Piper (make fetch-piper), whisper.cpp (make build-whisper)
 ├── PERSONALITY.md             # ← Edit this! (no code)
 ├── memory/                    # Session storage (auto-created)
 │   ├── 2026-09-13.json
@@ -251,9 +251,9 @@ Miaou: [Retrieves and summarizes from memory]
 - Check speakers are connected, and check volume in `.env` (`TTS_VOLUME`, macOS only — on Linux, set the level with `alsamixer`)
 - Test Piper directly: `echo "hello" | LD_LIBRARY_PATH=assets/piper assets/piper/piper -m assets/piper/en_US-amy-medium.onnx -f /tmp/test.wav --espeak_data assets/piper/espeak-ng-data && aplay /tmp/test.wav` (use `afplay` instead of `aplay` on macOS)
 
-### Micro not working (vosk_server mode)
+### Micro not working (whisper mode)
 - Test: `arecord -d 3 test.wav` then `aplay test.wav`
-- Make sure a Vosk server is running and reachable at `VOSK_SERVER_URL` (see [SERVER_SETUP.md](SERVER_SETUP.md))
+- Make sure `assets/whisper/whisper-cli` and the model exist (see [STT_SETUP.md](STT_SETUP.md))
 
 ### High latency/slow responses
 - Check network: `ping api.openai.com`
@@ -354,7 +354,7 @@ Found a bug? Have an idea? Edit and improve!
 
 Built with:
 - OpenAI API (LLM)
-- Vosk (speech recognition)
+- whisper.cpp (speech recognition)
 - Ebiten (graphics)
 - Piper (local text-to-speech)
 

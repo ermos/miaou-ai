@@ -1,139 +1,69 @@
-# 🎙️ Vosk Speech Recognition Server Setup
+# 🎙️ Speech Recognition Setup (whisper.cpp)
 
-This sets up the Vosk server that `AUDIO_MODE=vosk_server` talks to for
-real microphone input. It can run on the same Raspberry Pi as Miaou, or on
-a separate machine on your network.
-
-> The official Vosk server Docker image (`alphacep/kaldi-en`) is **amd64-only**
-> — it won't run natively on a Raspberry Pi. This guide installs the Python
-> `vosk` package directly instead, which ships an `aarch64` wheel and needs
-> no Docker/emulation.
+This sets up the speech-to-text engine that `AUDIO_MODE=whisper` uses for
+real microphone input: [whisper.cpp](https://github.com/ggml-org/whisper.cpp),
+a native C++ binary, no Python, no separate server. It detects the spoken
+language itself, so the same model handles English and French — no need to
+run one server per language the way Vosk would.
 
 ---
 
-## 🚀 Installation
+## 🚀 Build it
 
-### 1. Install Python deps
-
-```bash
-sudo apt install python3-pip python3-venv
-python3 -m venv ~/vosk-server/venv
-source ~/vosk-server/venv/bin/activate
-pip install vosk websockets
-```
-
-### 2. Get the server script
-
-This is Alphacep's reference websocket server (the protocol `audio_vosk.go`
-speaks: raw PCM over a websocket, ending with an `{"eof" : 1}` message):
+whisper.cpp ships no prebuilt binaries, so this builds from source. Run it
+**on the Raspberry Pi itself** (native compile — cross-compiling C++ for
+arm64 from another machine via Docker/QEMU is impractically slow):
 
 ```bash
-curl -o ~/vosk-server/asr_server.py \
-  https://raw.githubusercontent.com/alphacep/vosk-server/master/websocket/asr_server.py
+sudo apt install --no-install-recommends git cmake build-essential
+cd ~/miaou-ai
+make build-whisper
 ```
 
-The script still uses the old `websockets` handler signature
-(`recognize(websocket, path)`); recent `websockets` (10+) dropped the `path`
-argument and calling the handler then raises `TypeError: recognize() missing
-1 required positional argument: 'path'` on every connection. Patch it:
+This clones whisper.cpp, builds `whisper-cli`, downloads the small
+multilingual model (`tiny-q5_1`, quantized — ~30MB, light enough for a Pi's
+RAM), and drops both into `assets/whisper/`. It skips the build entirely if
+`assets/whisper/whisper-cli` already exists.
+
+To use a different (larger, more accurate, heavier) model:
 
 ```bash
-sed -i 's/async def recognize(websocket, path):/async def recognize(websocket):/' ~/vosk-server/asr_server.py
+make build-whisper WHISPER_MODEL=base
 ```
 
-### 3. Download a model
-
-The small English model is enough for this use case and light on RAM:
-
-```bash
-cd ~/vosk-server
-curl -LO https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
-unzip vosk-model-small-en-us-0.15.zip
-mv vosk-model-small-en-us-0.15 model
-rm vosk-model-small-en-us-0.15.zip
-```
-
-### 4. Run it
-
-The client records at 16kHz (`SAMPLE_RATE` in `.env`) — the server must be
-told to expect that, its own default is 8kHz:
-
-```bash
-cd ~/vosk-server
-source venv/bin/activate
-VOSK_SAMPLE_RATE=16000 python3 asr_server.py model
-```
-
-You should see `INFO:root:Listening on 0.0.0.0:2700`. Leave this running,
-or set it up as a systemd service below.
-
----
-
-## 🔁 Auto-start on boot (crash-resistant)
-
-Replace `pi` below with your actual Linux username (check with `whoami`):
-
-```bash
-sudo nano /etc/systemd/system/vosk-server.service
-```
-
-```ini
-[Unit]
-Description=Vosk speech recognition server
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=/home/pi/vosk-server
-Environment=VOSK_SAMPLE_RATE=16000
-ExecStart=/home/pi/vosk-server/venv/bin/python3 asr_server.py model
-Restart=always
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now vosk-server.service
-journalctl -u vosk-server.service -f
-```
+Then set `WHISPER_MODEL_FILE=ggml-base.bin` in `.env` to match — Miaou reads
+the model filename from there, it doesn't rebuild anything itself.
 
 ---
 
 ## ✅ Point Miaou at it
 
-In Miaou's `.env`:
+In `.env`:
 
 ```env
-AUDIO_MODE=vosk_server
-# Same Pi:
-VOSK_SERVER_URL=ws://localhost:2700
-# Separate machine:
-VOSK_SERVER_URL=ws://<server-ip>:2700
+AUDIO_MODE=whisper
 ```
+
+That's it — no server URL to configure, `WhisperBin`/`WhisperModel` in
+`config.go` already point at `assets/whisper/`.
 
 ---
 
 ## 🔧 Troubleshooting
 
-### Server won't start / `ModuleNotFoundError`
-Make sure you activated the venv before running it (`source venv/bin/activate`),
-or use the venv's full python path (as the systemd unit above does).
+### `make build-whisper` fails to compile
+Make sure `cmake` and a C++ compiler are installed (`build-essential` on
+Debian/Raspberry Pi OS). Check `cmake --version` (3.x+ needed).
 
-### Miaou gets no transcription (always empty after ~5s)
-- Check `VOSK_SAMPLE_RATE` on the server matches `SAMPLE_RATE` in Miaou's `.env` (both 16000).
-- Check the server is reachable: `curl -v telnet://<server-ip>:2700` should connect (then hang, that's normal — it's a websocket, not HTTP).
+### Transcription is empty or clearly wrong
+- Test the mic independently: `arecord -d 3 test.wav && aplay test.wav`.
+- Try a bigger model (`base` or `small`) — `tiny` is fast but the least
+  accurate, especially with background noise or a strong accent.
+- Run whisper-cli directly on a known-good WAV to isolate the model from the
+  mic/VAD pipeline: `assets/whisper/whisper-cli -m assets/whisper/ggml-tiny-q5_1.bin -f test.wav -l auto`
 
-### Find the server's IP (if running on a separate machine)
-```bash
-hostname -I
-```
-
-### Test the microphone independently
-```bash
-arecord -d 3 test.wav && aplay test.wav
-```
+### Slow responses
+The Pi's CPU is already busy with ebiten's software rendering (no GPU
+acceleration with the `fbdev` X driver used for SPI displays) — a bigger
+Whisper model adds real decode time on top of that. Stick to `tiny`/`base`
+unless accuracy is a real problem.
