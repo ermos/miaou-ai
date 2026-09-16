@@ -5,7 +5,7 @@ All configuration is managed through `.env` file. No need to edit code!
 ## 📝 .env File Location
 
 ```
-english-buddy/
+miaou-ai/
 ├── .env              ← Configuration file (edit this!)
 ├── main.py
 └── ...

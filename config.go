@@ -34,7 +34,8 @@ type Config struct {
 	MemoryDir       string
 	PersonalityFile string
 	AssetsDir       string
-	PiperVenvPython string
+	PiperBin        string // native piper executable (assets/piper/piper)
+	PiperEspeakData string // assets/piper/espeak-ng-data
 
 	Debug bool
 }
@@ -98,12 +99,13 @@ func LoadConfig() *Config {
 		MemoryDir:       filepath.Join(root, getenv("MEMORY_DIR", "memory")),
 		PersonalityFile: filepath.Join(root, getenv("PERSONALITY_FILE", "PERSONALITY.md")),
 		AssetsDir:       filepath.Join(root, "assets"),
-		PiperVenvPython: filepath.Join(root, "tts_engine", "venv", "bin", "python3"),
 
 		Debug: strings.EqualFold(getenv("DEBUG", "False"), "true"),
 	}
 
 	cfg.TTSVoice = filepath.Join(cfg.AssetsDir, "piper", "en_US-amy-medium.onnx")
+	cfg.PiperBin = filepath.Join(cfg.AssetsDir, "piper", "piper")
+	cfg.PiperEspeakData = filepath.Join(cfg.AssetsDir, "piper", "espeak-ng-data")
 
 	_ = os.MkdirAll(cfg.MemoryDir, 0o755)
 

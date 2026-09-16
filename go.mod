@@ -1,4 +1,4 @@
-module english-buddy
+module miaou-ai
 
 go 1.25.0
 
