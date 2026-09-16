@@ -160,6 +160,7 @@ func main() {
 
 	ebiten.SetWindowSize(buddy.cfg.ScreenWidth, buddy.cfg.ScreenHeight)
 	ebiten.SetWindowTitle("Miaou - English Buddy")
+	ebiten.SetFullscreen(true)
 	if err := ebiten.RunGame(face); err != nil {
 		fmt.Printf("❌ Display error: %v\n", err)
 	}
