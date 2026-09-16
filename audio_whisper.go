@@ -1,17 +1,18 @@
 package main
 
 // ponytail: this file could not be exercised in the sandbox this was
-// written in — there was no microphone or whisper.cpp binary available.
-// Test on real hardware before relying on it.
+// written in — there was no microphone available. Test on real hardware
+// before relying on it.
 
 import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -19,9 +20,19 @@ import (
 	"github.com/gen2brain/malgo"
 )
 
+// WhisperAudio captures the mic and sends it to OpenAI's hosted transcription
+// API. Local speech recognition (Vosk, then whisper.cpp) kept hitting real
+// walls on a Pi 4: Vosk's small models are single-language, and whisper.cpp's
+// tiny model can't reliably auto-detect language on a short/noisy clip
+// (observed live: Russian gibberish for a French sentence) — the app already
+// depends on OpenAI being reachable for chat, so offloading STT there too
+// removes a whole local model/build/language-guessing problem for free.
 type WhisperAudio struct {
-	whisperBin string
-	modelPath  string
+	apiURL     string
+	apiKey     string
+	model      string
+	httpClient *http.Client
+
 	sampleRate int
 	timeout    time.Duration
 
@@ -37,10 +48,12 @@ func NewWhisperAudio(cfg *Config) (*WhisperAudio, error) {
 		return nil, fmt.Errorf("malgo init: %w", err)
 	}
 
-	fmt.Printf("✅ Audio Manager ready (whisper.cpp: %s)\n", cfg.WhisperModel)
+	fmt.Printf("✅ Audio Manager ready (OpenAI transcription model: %s)\n", cfg.WhisperModel)
 	return &WhisperAudio{
-		whisperBin:       cfg.WhisperBin,
-		modelPath:        cfg.WhisperModel,
+		apiURL:           cfg.LLMURL + "/audio/transcriptions",
+		apiKey:           cfg.OpenAIAPIKey,
+		model:            cfg.WhisperModel,
+		httpClient:       &http.Client{Timeout: 30 * time.Second},
 		sampleRate:       cfg.SampleRate,
 		timeout:          time.Duration(cfg.ListeningTimeout) * time.Second,
 		silenceThreshold: int32(cfg.VADSilenceThreshold),
@@ -150,27 +163,10 @@ func (w *WhisperAudio) recordAudio() ([]byte, error) {
 	return captured, nil
 }
 
-// whisperOutput mirrors the subset of whisper-cli's -ojf (full JSON) output
-// this cares about: the recognized text and, per token, its probability
-// ("p"), used as a confidence signal. Unlisted fields (timestamps, model
-// info, ...) are simply ignored by json.Unmarshal.
-type whisperOutput struct {
-	Transcription []struct {
-		Text   string `json:"text"`
-		Tokens []struct {
-			P float64 `json:"p"`
-		} `json:"tokens"`
-	} `json:"transcription"`
-}
-
-// transcribe runs whisper.cpp twice on the captured PCM, once forced to
-// English and once to French, and keeps whichever whisper itself was more
-// confident about (mean per-token probability). whisper.cpp's own "auto"
-// language detection picks from ~100 languages off a single short/noisy
-// clip and a tiny model — observed live returning Russian gibberish for a
-// French sentence. Since only these two languages actually matter here,
-// forcing both candidates and picking the better score is far more robust
-// than trusting one open-ended guess.
+// transcribe uploads the captured PCM (wrapped as a WAV file) to OpenAI's
+// /audio/transcriptions endpoint. No language is forced: this model's
+// language auto-detection is far more reliable than a local tiny model's,
+// so there's no need to race English/French candidates against each other.
 func (w *WhisperAudio) transcribe(pcm []byte) (string, error) {
 	wavPath, err := writeWAV(pcm, w.sampleRate)
 	if err != nil {
@@ -178,84 +174,61 @@ func (w *WhisperAudio) transcribe(pcm []byte) (string, error) {
 	}
 	defer func() { _ = os.Remove(wavPath) }()
 
-	type result struct {
-		text string
-		conf float64
-		err  error
-	}
-	run := func(lang string) <-chan result {
-		ch := make(chan result, 1)
-		go func() {
-			text, conf, err := w.transcribeLang(wavPath, lang)
-			ch <- result{text, conf, err}
-		}()
-		return ch
-	}
-
-	en, fr := <-run("en"), <-run("fr")
-
-	switch {
-	case en.err != nil && fr.err != nil:
-		return "", en.err
-	case en.err != nil:
-		return fr.text, nil
-	case fr.err != nil:
-		return en.text, nil
-	case en.text == "":
-		return fr.text, nil
-	case fr.text == "":
-		return en.text, nil
-	case fr.conf > en.conf:
-		return fr.text, nil
-	default:
-		return en.text, nil
-	}
-}
-
-func (w *WhisperAudio) transcribeLang(wavPath, lang string) (string, float64, error) {
-	outDir, err := os.MkdirTemp("", "miaou-whisper-*")
+	f, err := os.Open(wavPath)
 	if err != nil {
-		return "", 0, err
+		return "", fmt.Errorf("open wav: %w", err)
 	}
-	defer func() { _ = os.RemoveAll(outDir) }()
-	outBase := filepath.Join(outDir, "out")
+	defer func() { _ = f.Close() }()
 
-	cmd := exec.Command(w.whisperBin, "-m", w.modelPath, "-f", wavPath, "-l", lang, "-ojf", "-of", outBase, "-np", "-nt")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", 0, fmt.Errorf("whisper-cli (%s): %w: %s", lang, err, stderr.String())
-	}
-
-	data, err := os.ReadFile(outBase + ".json")
+	body := new(bytes.Buffer)
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", "audio.wav")
 	if err != nil {
-		return "", 0, fmt.Errorf("read whisper output (%s): %w", lang, err)
+		return "", fmt.Errorf("build request: %w", err)
 	}
-	var parsed whisperOutput
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		return "", 0, fmt.Errorf("parse whisper output (%s): %w", lang, err)
+	if _, err := io.Copy(part, f); err != nil {
+		return "", fmt.Errorf("build request: %w", err)
 	}
-
-	var text strings.Builder
-	var probSum float64
-	var probCount int
-	for _, seg := range parsed.Transcription {
-		text.WriteString(seg.Text)
-		for _, tok := range seg.Tokens {
-			probSum += tok.P
-			probCount++
-		}
+	if err := writer.WriteField("model", w.model); err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return "", fmt.Errorf("build request: %w", err)
 	}
 
-	var conf float64
-	if probCount > 0 {
-		conf = probSum / float64(probCount)
+	req, err := http.NewRequest(http.MethodPost, w.apiURL, body)
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
 	}
-	return strings.TrimSpace(text.String()), conf, nil
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+w.apiKey)
+
+	resp, err := w.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("call OpenAI transcription API: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read transcription response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("OpenAI transcription API: %d %s", resp.StatusCode, string(respBody))
+	}
+
+	var parsed struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return "", fmt.Errorf("parse transcription response: %w", err)
+	}
+	return strings.TrimSpace(parsed.Text), nil
 }
 
 // writeWAV wraps raw S16LE mono PCM in a WAV container and returns the
-// temp file path; whisper-cli (and most audio tools) won't accept bare PCM.
+// temp file path; the transcription API (like most audio tools) won't
+// accept bare PCM.
 func writeWAV(pcm []byte, sampleRate int) (string, error) {
 	f, err := os.CreateTemp("", "miaou-*.wav")
 	if err != nil {

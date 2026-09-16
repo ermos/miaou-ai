@@ -26,7 +26,6 @@ A cute English learning chat buddy written in Go, powered by the OpenAI API and 
 - USB microphone (for `AUDIO_MODE=whisper`)
 - Mini 3.5" display (320x240 SPI)
 - USB speakers
-- [whisper.cpp built locally](STT_SETUP.md) if using real microphone input
 
 ---
 
@@ -50,7 +49,8 @@ curl -sL "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/
 ```bash
 nano .env
 # Set OPENAI_API_KEY, and AUDIO_MODE (text_input to test from the keyboard,
-# whisper for a real microphone via whisper.cpp — see STT_SETUP.md)
+# whisper for a real microphone — sends audio to OpenAI's transcription
+# API using the same key, no separate setup needed)
 ```
 
 ### 3. Build
@@ -203,12 +203,12 @@ miaou-ai/
 ├── personality.go             # Load PERSONALITY.md
 ├── face.go                    # ebiten window + face rendering
 ├── brain.go                   # Animation state machine (blink + mouth timing)
-├── audio.go / audio_whisper.go # Text input / mic + local whisper.cpp
+├── audio.go / audio_whisper.go # Text input / mic + OpenAI transcription API
 ├── llm.go                     # OpenAI integration
 ├── context.go                 # Memory + sessions
 ├── wakeword.go                # "Miaou" detection/extraction
 ├── tts.go                     # Native Piper binary + afplay/aplay playback
-├── assets/                    # Cat face images, Piper (make fetch-piper), whisper.cpp (make build-whisper)
+├── assets/                    # Cat face images + Piper binary/voice model (make fetch-piper)
 ├── PERSONALITY.md             # ← Edit this! (no code)
 ├── memory/                    # Session storage (auto-created)
 │   ├── 2026-09-13.json
@@ -253,7 +253,7 @@ Miaou: [Retrieves and summarizes from memory]
 
 ### Micro not working (whisper mode)
 - Test: `arecord -d 3 test.wav` then `aplay test.wav`
-- Make sure `assets/whisper/whisper-cli` and the model exist (see [STT_SETUP.md](STT_SETUP.md))
+- Check `OPENAI_API_KEY` in `.env` — transcription uses the same key as the LLM chat
 
 ### High latency/slow responses
 - Check network: `ping api.openai.com`
@@ -353,8 +353,7 @@ Found a bug? Have an idea? Edit and improve!
 ## 🙏 Thanks
 
 Built with:
-- OpenAI API (LLM)
-- whisper.cpp (speech recognition)
+- OpenAI API (LLM + speech recognition)
 - Ebiten (graphics)
 - Piper (local text-to-speech)
 

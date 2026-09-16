@@ -6,9 +6,6 @@
 # Piper TTS (downloaded via `make fetch-piper`, not source)
 assets/piper/*
 
-# whisper.cpp (built via `make build-whisper`, not source)
-assets/whisper/*
-
 # Python (legacy)
 __pycache__/
 *.py[cod]
