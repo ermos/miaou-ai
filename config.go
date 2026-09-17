@@ -20,7 +20,10 @@ type Config struct {
 	SampleRate int
 	TTSVolume  float64
 	TTSModel   string // OpenAI TTS model, e.g. "gpt-4o-mini-tts"
-	TTSVoice   string // OpenAI TTS voice, e.g. "alloy"
+	TTSVoice   string // OpenAI TTS voice, e.g. "nova"
+	// Steers tone/intonation (accent, emotion, pacing) - only honored by
+	// gpt-4o-mini-tts, ignored by tts-1/tts-1-hd.
+	TTSInstructions string
 
 	WhisperModel string // OpenAI transcription model name, e.g. "whisper-1"
 	// Without a language hint, OpenAI's transcription endpoint occasionally
@@ -103,7 +106,9 @@ func LoadConfig() *Config {
 		SampleRate: getenvInt("SAMPLE_RATE", 16000),
 		TTSVolume:  getenvFloat("TTS_VOLUME", 0.9),
 		TTSModel:   getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
-		TTSVoice:   getenv("OPENAI_TTS_VOICE", "alloy"),
+		TTSVoice:   getenv("OPENAI_TTS_VOICE", "nova"),
+		TTSInstructions: getenv("OPENAI_TTS_INSTRUCTIONS",
+			"Speak in a warm, cheerful, upbeat tone, like a happy friendly cat talking to a child."),
 
 		AudioMode: audioMode,
 
