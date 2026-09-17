@@ -47,7 +47,7 @@ func NewTTS(cfg *Config) *TTS {
 		voice:        cfg.TTSVoice,
 		instructions: cfg.TTSInstructions,
 		volume:       cfg.TTSVolume,
-		httpClient:   &http.Client{Timeout: 30 * time.Second},
+		httpClient:   &http.Client{Timeout: 60 * time.Second},
 	}
 }
 

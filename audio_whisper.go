@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -39,6 +40,7 @@ type WhisperAudio struct {
 
 	silenceThreshold int32
 	silenceHangover  time.Duration
+	minVoiceDuration time.Duration
 	debug            bool
 
 	malgoCtx *malgo.AllocatedContext
@@ -56,11 +58,12 @@ func NewWhisperAudio(cfg *Config) (*WhisperAudio, error) {
 		apiKey:           cfg.OpenAIAPIKey,
 		model:            cfg.WhisperModel,
 		language:         cfg.WhisperLanguage,
-		httpClient:       &http.Client{Timeout: 30 * time.Second},
+		httpClient:       &http.Client{Timeout: 60 * time.Second},
 		sampleRate:       cfg.SampleRate,
 		timeout:          time.Duration(cfg.ListeningTimeout) * time.Second,
 		silenceThreshold: int32(cfg.VADSilenceThreshold),
 		silenceHangover:  time.Duration(cfg.VADSilenceMs) * time.Millisecond,
+		minVoiceDuration: time.Duration(cfg.VADMinVoiceMs) * time.Millisecond,
 		debug:            cfg.Debug,
 		malgoCtx:         ctx,
 	}, nil
@@ -94,20 +97,23 @@ func (w *WhisperAudio) Listen() (string, bool) {
 	return text, true
 }
 
-// peakAmplitude returns the largest sample magnitude in a chunk of
-// little-endian S16 PCM, used as a cheap voice-activity signal.
-func peakAmplitude(pcm []byte) int32 {
-	var peak int32
-	for i := 0; i+1 < len(pcm); i += 2 {
-		s := int32(int16(binary.LittleEndian.Uint16(pcm[i:])))
-		if s < 0 {
-			s = -s
-		}
-		if s > peak {
-			peak = s
-		}
+// rmsLevel returns the root-mean-square amplitude of a chunk of
+// little-endian S16 PCM. Unlike a single-sample peak, it reflects energy
+// sustained across the whole chunk: a keyboard click or a clap is a brief
+// spike surrounded by silence within the same chunk, so it reads much
+// lower on RMS than continuous speech does at the same peak amplitude.
+func rmsLevel(pcm []byte) int32 {
+	if len(pcm) < 2 {
+		return 0
 	}
-	return peak
+	var sumSq float64
+	n := 0
+	for i := 0; i+1 < len(pcm); i += 2 {
+		s := float64(int16(binary.LittleEndian.Uint16(pcm[i:])))
+		sumSq += s * s
+		n++
+	}
+	return int32(math.Sqrt(sumSq / float64(n)))
 }
 
 func (w *WhisperAudio) recordAudio() ([]byte, bool, error) {
@@ -117,30 +123,46 @@ func (w *WhisperAudio) recordAudio() ([]byte, bool, error) {
 	deviceConfig.SampleRate = uint32(w.sampleRate)
 
 	var (
-		mu           sync.Mutex
-		captured     []byte
-		lastVoiceAt  = time.Now()
-		voiceHeard   bool
-		lastPeak     int32
-		firstVoiceAt int // byte offset into captured of the first loud chunk
-		lastVoiceIdx int // byte offset just past the most recent loud chunk
+		mu              sync.Mutex
+		captured        []byte
+		lastVoiceAt     = time.Now()
+		voiceHeard      bool
+		lastLevel       int32
+		firstVoiceAt    int       // byte offset into captured of the first loud chunk
+		lastVoiceIdx    int       // byte offset just past the most recent loud chunk
+		loudStreakStart time.Time // zero when not currently in a loud streak
+		loudStreakFrom  int       // byte offset where the current loud streak began
 	)
 
 	callbacks := malgo.DeviceCallbacks{
 		Data: func(_, pSample []byte, _ uint32) {
-			peak := peakAmplitude(pSample)
-			loud := peak > w.silenceThreshold
+			level := rmsLevel(pSample)
+			loud := level > w.silenceThreshold
 
 			mu.Lock()
 			chunkStart := len(captured)
 			captured = append(captured, pSample...)
-			lastPeak = peak
-			if loud {
-				lastVoiceAt = time.Now()
-				if !voiceHeard {
-					firstVoiceAt = chunkStart
+			lastLevel = level
+
+			switch {
+			case !loud && !voiceHeard:
+				// A brief loud blip (click, clap) not sustained long enough
+				// to clear minVoiceDuration - drop the streak instead of
+				// starting a recording for it.
+				loudStreakStart = time.Time{}
+			case loud && !voiceHeard:
+				if loudStreakStart.IsZero() {
+					loudStreakStart = time.Now()
+					loudStreakFrom = chunkStart
 				}
-				voiceHeard = true
+				if time.Since(loudStreakStart) >= w.minVoiceDuration {
+					voiceHeard = true
+					firstVoiceAt = loudStreakFrom
+					lastVoiceAt = time.Now()
+					lastVoiceIdx = len(captured)
+				}
+			case loud && voiceHeard:
+				lastVoiceAt = time.Now()
 				lastVoiceIdx = len(captured)
 			}
 			mu.Unlock()
@@ -166,13 +188,13 @@ func (w *WhisperAudio) recordAudio() ([]byte, bool, error) {
 	for tick := 0; ; tick++ {
 		now := <-ticker.C
 		mu.Lock()
-		spoke, silentFor, peak := voiceHeard, now.Sub(lastVoiceAt), lastPeak
+		spoke, silentFor, level := voiceHeard, now.Sub(lastVoiceAt), lastLevel
 		mu.Unlock()
 
 		// ~once/second: confirms whether spoken audio is actually crossing
 		// VAD_SILENCE_THRESHOLD at all, vs. always waiting out the timeout.
 		if w.debug && tick%10 == 0 {
-			fmt.Printf("🔊 peak=%d threshold=%d spoke=%v\n", peak, w.silenceThreshold, spoke)
+			fmt.Printf("🔊 level=%d threshold=%d spoke=%v\n", level, w.silenceThreshold, spoke)
 		}
 
 		if now.After(deadline) || (spoke && silentFor > w.silenceHangover) {

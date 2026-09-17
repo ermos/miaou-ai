@@ -46,12 +46,17 @@ type Config struct {
 
 	// Voice-activity detection: stop recording once speech has been heard
 	// followed by this much silence, instead of always waiting the full
-	// ListeningTimeout. VADSilenceThreshold is a peak PCM amplitude
-	// (0-32767) below which a chunk counts as silence — mic gain and
-	// ambient noise vary per device, so this needs to be tunable rather
-	// than a fixed constant.
+	// ListeningTimeout. VADSilenceThreshold is an RMS PCM energy level
+	// (0-32767) above which a chunk counts as loud — mic gain and ambient
+	// noise vary per device, so this needs to be tunable rather than a
+	// fixed constant. RMS (not peak) so a brief loud transient (keyboard
+	// click, clap) doesn't read as loud as sustained speech at the same
+	// peak amplitude. VADMinVoiceMs additionally requires that loudness to
+	// hold for this long before it counts as real speech, rejecting a
+	// one-off transient outright instead of just discounting it.
 	VADSilenceThreshold int
 	VADSilenceMs        int
+	VADMinVoiceMs       int
 
 	MemoryDir       string
 	PersonalityFile string
@@ -119,8 +124,9 @@ func LoadConfig() *Config {
 		InactivityTimeout: getenvInt("INACTIVITY_TIMEOUT", 300),
 		ListeningTimeout:  getenvInt("LISTENING_TIMEOUT", 30),
 
-		VADSilenceThreshold: getenvInt("VAD_SILENCE_THRESHOLD", 500),
+		VADSilenceThreshold: getenvInt("VAD_SILENCE_THRESHOLD", 300),
 		VADSilenceMs:        getenvInt("VAD_SILENCE_MS", 1200),
+		VADMinVoiceMs:       getenvInt("VAD_MIN_VOICE_MS", 150),
 
 		WhisperModel:    getenv("OPENAI_WHISPER_MODEL", "whisper-1"),
 		WhisperLanguage: getenv("OPENAI_WHISPER_LANGUAGE", "en"),
