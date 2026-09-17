@@ -30,22 +30,24 @@ func stripEmojis(text string) string {
 }
 
 type TTS struct {
-	apiURL     string
-	apiKey     string
-	model      string
-	voice      string
-	volume     float64
-	httpClient *http.Client
+	apiURL       string
+	apiKey       string
+	model        string
+	voice        string
+	instructions string
+	volume       float64
+	httpClient   *http.Client
 }
 
 func NewTTS(cfg *Config) *TTS {
 	return &TTS{
-		apiURL:     cfg.LLMURL + "/audio/speech",
-		apiKey:     cfg.OpenAIAPIKey,
-		model:      cfg.TTSModel,
-		voice:      cfg.TTSVoice,
-		volume:     cfg.TTSVolume,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		apiURL:       cfg.LLMURL + "/audio/speech",
+		apiKey:       cfg.OpenAIAPIKey,
+		model:        cfg.TTSModel,
+		voice:        cfg.TTSVoice,
+		instructions: cfg.TTSInstructions,
+		volume:       cfg.TTSVolume,
+		httpClient:   &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -64,18 +66,25 @@ type speechRequest struct {
 	Input          string `json:"input"`
 	Voice          string `json:"voice"`
 	ResponseFormat string `json:"response_format"`
+	Instructions   string `json:"instructions,omitempty"`
 }
 
 // synthesize calls OpenAI's /audio/speech endpoint and returns a WAV file's
 // bytes (response_format=wav keeps it directly playable by afplay/aplay,
 // no mp3 decoder needed on the Pi).
 func (t *TTS) synthesize(text string) ([]byte, error) {
-	reqBody, _ := json.Marshal(speechRequest{
+	payload := speechRequest{
 		Model:          t.model,
 		Input:          text,
 		Voice:          t.voice,
 		ResponseFormat: "wav",
-	})
+	}
+	// The instructions field is only honored by gpt-4o-mini-tts; tts-1/
+	// tts-1-hd reject unknown fields, so only send it for that model.
+	if t.model == "gpt-4o-mini-tts" {
+		payload.Instructions = t.instructions
+	}
+	reqBody, _ := json.Marshal(payload)
 
 	req, err := http.NewRequest(http.MethodPost, t.apiURL, bytes.NewReader(reqBody))
 	if err != nil {
