@@ -19,7 +19,8 @@ type Config struct {
 
 	SampleRate int
 	TTSVolume  float64
-	TTSVoice   string // path to the piper .onnx voice model
+	TTSModel   string // OpenAI TTS model, e.g. "gpt-4o-mini-tts"
+	TTSVoice   string // OpenAI TTS voice, e.g. "alloy"
 
 	WhisperModel string // OpenAI transcription model name, e.g. "whisper-1"
 	// Without a language hint, OpenAI's transcription endpoint occasionally
@@ -52,8 +53,6 @@ type Config struct {
 	MemoryDir       string
 	PersonalityFile string
 	AssetsDir       string
-	PiperBin        string // native piper executable (assets/piper/piper)
-	PiperEspeakData string // assets/piper/espeak-ng-data
 
 	Debug bool
 }
@@ -103,6 +102,8 @@ func LoadConfig() *Config {
 
 		SampleRate: getenvInt("SAMPLE_RATE", 16000),
 		TTSVolume:  getenvFloat("TTS_VOLUME", 0.9),
+		TTSModel:   getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
+		TTSVoice:   getenv("OPENAI_TTS_VOICE", "alloy"),
 
 		AudioMode: audioMode,
 
@@ -125,10 +126,6 @@ func LoadConfig() *Config {
 
 		Debug: strings.EqualFold(getenv("DEBUG", "False"), "true"),
 	}
-
-	cfg.TTSVoice = filepath.Join(cfg.AssetsDir, "piper", "en_US-amy-medium.onnx")
-	cfg.PiperBin = filepath.Join(cfg.AssetsDir, "piper", "piper")
-	cfg.PiperEspeakData = filepath.Join(cfg.AssetsDir, "piper", "espeak-ng-data")
 
 	_ = os.MkdirAll(cfg.MemoryDir, 0o755)
 

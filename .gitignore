@@ -3,9 +3,6 @@
 /english-buddy
 /dist
 
-# Piper TTS (downloaded via `make fetch-piper`, not source)
-assets/piper/*
-
 # Python (legacy)
 __pycache__/
 *.py[cod]

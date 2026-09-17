@@ -7,7 +7,7 @@ A cute English learning chat buddy written in Go, powered by the OpenAI API and 
 - Animated cat face (image-based)
 - French→English learning assistance
 - Pronunciation help
-- Local, realistic text-to-speech via Piper (no cloud TTS)
+- Realistic text-to-speech via the OpenAI API
 
 > This project was originally written in Python; that version is kept for reference in `python_legacy/` but is no longer maintained.
 
@@ -31,29 +31,18 @@ A cute English learning chat buddy written in Go, powered by the OpenAI API and 
 
 ## 🚀 Installation
 
-### 1. Set up the Piper TTS engine (local, one-time)
-
-Piper runs as a native binary (no Python) via `make fetch-piper`, which pulls
-the Linux/arm64 build into `assets/piper/`:
-
-```bash
-make fetch-piper
-
-# Download the voice model (female, US English, medium quality)
-curl -sL "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx" -o assets/piper/en_US-amy-medium.onnx
-curl -sL "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json" -o assets/piper/en_US-amy-medium.onnx.json
-```
-
-### 2. Configure
+### 1. Configure
 
 ```bash
 nano .env
 # Set OPENAI_API_KEY, and AUDIO_MODE (text_input to test from the keyboard,
 # whisper for a real microphone — sends audio to OpenAI's transcription
 # API using the same key, no separate setup needed)
+# Optionally set OPENAI_TTS_MODEL (default gpt-4o-mini-tts) and
+# OPENAI_TTS_VOICE (default alloy) — speech also goes through the OpenAI API.
 ```
 
-### 3. Build
+### 2. Build
 
 ```bash
 go build -o miaou-ai .
@@ -207,8 +196,8 @@ miaou-ai/
 ├── llm.go                     # OpenAI integration
 ├── context.go                 # Memory + sessions
 ├── wakeword.go                # "Miaou" detection/extraction
-├── tts.go                     # Native Piper binary + afplay/aplay playback
-├── assets/                    # Cat face images + Piper binary/voice model (make fetch-piper)
+├── tts.go                     # OpenAI speech API + afplay/aplay playback
+├── assets/                    # Cat face images
 ├── PERSONALITY.md             # ← Edit this! (no code)
 ├── memory/                    # Session storage (auto-created)
 │   ├── 2026-09-13.json
@@ -249,7 +238,8 @@ Miaou: [Retrieves and summarizes from memory]
 
 ### No audio output / TTS errors
 - Check speakers are connected, and check volume in `.env` (`TTS_VOLUME`, macOS only — on Linux, set the level with `alsamixer`)
-- Test Piper directly: `echo "hello" | LD_LIBRARY_PATH=assets/piper assets/piper/piper -m assets/piper/en_US-amy-medium.onnx -f /tmp/test.wav --espeak_data assets/piper/espeak-ng-data && aplay /tmp/test.wav` (use `afplay` instead of `aplay` on macOS)
+- Check `OPENAI_API_KEY` in `.env` — speech uses the same key as the LLM chat
+- Test the speech API directly: `curl -s https://api.openai.com/v1/audio/speech -H "Authorization: Bearer $OPENAI_API_KEY" -H "Content-Type: application/json" -d '{"model":"gpt-4o-mini-tts","input":"hello","voice":"alloy","response_format":"wav"}' -o /tmp/test.wav && aplay /tmp/test.wav` (use `afplay` instead of `aplay` on macOS)
 
 ### Micro not working (whisper mode)
 - Test: `arecord -d 3 test.wav` then `aplay test.wav`
@@ -353,9 +343,8 @@ Found a bug? Have an idea? Edit and improve!
 ## 🙏 Thanks
 
 Built with:
-- OpenAI API (LLM + speech recognition)
+- OpenAI API (LLM + speech recognition + text-to-speech)
 - Ebiten (graphics)
-- Piper (local text-to-speech)
 
 ---
 
